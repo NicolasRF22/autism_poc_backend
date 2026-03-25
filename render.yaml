@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: autism-backend
+    runtime: python
+    plan: free
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn backend.app:app --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: AUTH_ADMIN_USERNAME
+        value: admin
+      - key: AUTH_ADMIN_PASSWORD
+        sync: false
+      - key: AUTH_JWT_SECRET
+        sync: false
+      - key: AUTH_TOKEN_EXP_MINUTES
+        value: "480"
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CHROMA_API_KEY
+        sync: false
+      - key: CHROMA_TENANT
+        sync: false
+      - key: CHROMA_DATABASE
+        sync: false
+      - key: CHROMA_COLLECTION_NAME
+        value: documentos_pei
