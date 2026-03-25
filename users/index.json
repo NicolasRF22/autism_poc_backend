@@ -1,0 +1,20 @@
+[
+  {
+    "id": "a834e129-23d6-48fc-9fd4-d2a4216714be",
+    "username": "admin",
+    "password_hash": "scrypt:32768:8:1$dOh4900cOOmsxcwL$8d29a11811af2bfb1bf6b72e15ab10209c4f859a634e7f24d59c76eeb7e9b617ecfd9e23ba6cf42f4f90da4a7551318bdca07d3e5556963c9d1e39621c078935",
+    "role": "admin",
+    "is_active": true,
+    "created_at": "2026-03-23T20:28:53.312518",
+    "updated_at": "2026-03-23T20:28:53.312579"
+  },
+  {
+    "id": "a7ebf929-0f5c-4ed9-a4ee-31336e29bb3d",
+    "username": "nicolas",
+    "password_hash": "scrypt:32768:8:1$tvmHNUwGbSvhFKPf$ac6da424e91ee9ba1ab1bc0f8b57444777420bbb572635661974c28a276f027fc698248576d754b7c40f6c0ae76455e4601cf651705b715b20ecd0bf08f805fa",
+    "role": "admin",
+    "is_active": true,
+    "created_at": "2026-03-23T20:44:24.362130",
+    "updated_at": "2026-03-23T20:44:33.831503"
+  }
+]

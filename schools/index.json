@@ -1,0 +1,26 @@
+[
+  {
+    "id": "a9a4c4c3-cecf-47bf-b831-a542af348559",
+    "created_at": "2026-03-10T16:24:52.601200",
+    "name": "ESCOLA MUNICIPAL ALMERINDA VALENTE DE LIMA",
+    "cnpj": "19.690.403/0001-38",
+    "institution_type": "Pública",
+    "address": {
+      "city": "Piranguinho"
+    },
+    "notes": "",
+    "updated_at": "2026-03-24T19:36:30.684050"
+  },
+  {
+    "id": "eff4e364-fb99-4fbc-811b-b352738e10ef",
+    "name": "Universidade Federal de Itajubá",
+    "cnpj": "21.040.001/0001-30",
+    "institution_type": "Pública",
+    "address": {
+      "city": "Itajubá"
+    },
+    "notes": "",
+    "created_at": "2026-03-24T19:33:43.680642",
+    "updated_at": "2026-03-24T19:33:43.680676"
+  }
+]
