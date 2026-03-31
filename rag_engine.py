@@ -6,7 +6,7 @@ from vector_store import VectorStore
 from document_processor import generate_embeddings
 from prompts import SYSTEM_PROMPT_CHAT, SYSTEM_PROMPT_PEI
 from typing import Dict, List, Optional
-from usage_tracker import extract_input_tokens, record_model_usage
+from usage_tracker import extract_usage_metrics, record_model_usage
 
 # Stopwords básicas em português para extração de keywords
 _STOPWORDS = {
@@ -52,11 +52,16 @@ class RAGEngine:
         message: str,
         session_id: str = "default",
         context_filter: Optional[Dict] = None,
+        integrated_context: str = "",
+        system_prompt_chat: Optional[str] = None,
     ) -> Dict:
         """Processa mensagem usando RAG: busca contexto e responde com Gemini."""
         # 1. Embedding da query com task_type correto para busca assimétrica
         query_embedding = generate_embeddings(
-            message, self.api_key, task_type="RETRIEVAL_QUERY"
+            message,
+            self.api_key,
+            task_type="RETRIEVAL_QUERY",
+            operation="rag_chat_query_embedding",
         )
 
         # 2. Extrair termos-chave para busca híbrida (keyword fallback)
@@ -79,24 +84,37 @@ class RAGEngine:
             context_block = "\n(Nenhum documento indexado encontrado.)\n"
 
         # 4. Gerenciar sessão de chat
-        if session_id not in self.chat_sessions:
-            self.chat_sessions[session_id] = self.client.chats.create(
+        chat_system_prompt = (system_prompt_chat or SYSTEM_PROMPT_CHAT).strip()
+        chat_session_key = f"{session_id}::{hash(chat_system_prompt)}"
+        if chat_session_key not in self.chat_sessions:
+            self.chat_sessions[chat_session_key] = self.client.chats.create(
                 model=self.generation_model,
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT_CHAT,
+                    system_instruction=chat_system_prompt,
                 ),
             )
 
-        chat = self.chat_sessions[session_id]
+        chat = self.chat_sessions[chat_session_key]
 
         # 5. Enviar mensagem com contexto
-        full_prompt = f"{context_block}\nPergunta: {message}"
+        integrated_block = ""
+        if integrated_context and integrated_context.strip():
+            integrated_block = f"\nContexto integrado (cadastro/diário/PDI):\n{integrated_context}\n"
+
+        full_prompt = f"{context_block}{integrated_block}\nPergunta: {message}"
         response = chat.send_message(full_prompt)
-        input_tokens = extract_input_tokens(response, fallback_text=full_prompt)
-        record_model_usage(self.generation_model, input_tokens=input_tokens)
+        usage = extract_usage_metrics(response, fallback_text=full_prompt)
+        record_model_usage(
+            self.generation_model,
+            input_tokens=usage['input_tokens'],
+            output_tokens=usage['output_tokens'],
+            total_tokens=usage['total_tokens'],
+            operation='rag_chat_generation',
+        )
 
         return {
             "response": response.text,
+            "usage": usage,
             "sources": [
                 {
                     "file_name": d["metadata"].get("file_name", ""),
@@ -115,17 +133,24 @@ class RAGEngine:
         student_name: str,
         school: str,
         additional_info: str = "",
+        system_prompt_pei: Optional[str] = None,
+        context_filter: Optional[Dict] = None,
+        integrated_context: str = "",
     ) -> Dict:
         """Gera PEI completo estruturado a partir dos documentos indexados."""
         # 1. Buscar documentos relacionados ao estudante
         query_text = f"{student_name} {school} {additional_info}"
         query_embedding = generate_embeddings(
-            query_text, self.api_key, task_type="RETRIEVAL_QUERY"
+            query_text,
+            self.api_key,
+            task_type="RETRIEVAL_QUERY",
+            operation="pei_query_embedding",
         )
         docs = self.vector_store.hybrid_search(
             query_embedding,
             terms=_extract_keywords(query_text),
             k=15,
+            filter_metadata=context_filter,
         )
 
         # 2. Montar contexto
@@ -135,7 +160,8 @@ class RAGEngine:
             context = "(Nenhum documento encontrado. Gere o PEI com base nas informações fornecidas.)"
 
         # 3. Prompt completo
-        pei_prompt = f"""{SYSTEM_PROMPT_PEI}
+        pei_system_prompt = (system_prompt_pei or SYSTEM_PROMPT_PEI).strip()
+        pei_prompt = f"""{pei_system_prompt}
 
 DADOS DO ESTUDANTE:
 - Nome: {student_name}
@@ -145,6 +171,9 @@ DADOS DO ESTUDANTE:
 CONTEXTO DOS DOCUMENTOS INDEXADOS:
 {context}
 
+CONTEXTO INTEGRADO (CADASTRO/DIÁRIO/PDI):
+{integrated_context or '(Sem dados adicionais integrados para este aluno)'}
+
 Gere agora o PEI COMPLETO com as 10 seções obrigatórias, personalizado para {student_name}."""
 
         # 4. Chamar Gemini
@@ -152,12 +181,12 @@ Gere agora o PEI COMPLETO com as 10 seções obrigatórias, personalizado para {
             model=self.generation_model,
             contents=pei_prompt,
         )
-        input_tokens = extract_input_tokens(response, fallback_text=pei_prompt)
-        record_model_usage(self.generation_model, input_tokens=input_tokens)
+        usage = extract_usage_metrics(response, fallback_text=pei_prompt)
 
         return {
             "pei": response.text,
             "student_name": student_name,
             "school": school,
             "sources_count": len(docs),
+            "usage": usage,
         }

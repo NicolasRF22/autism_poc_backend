@@ -2,10 +2,10 @@
 import os
 import json
 import uuid
-from datetime import datetime
 from typing import Dict, List, Optional
 
 from werkzeug.security import check_password_hash, generate_password_hash
+from time_utils import now_brasilia_iso
 
 
 VALID_ROLES = {"admin", "editor", "viewer"}
@@ -53,8 +53,8 @@ class AuthStorage:
                 "password_hash": generate_password_hash(self.default_admin_password),
                 "role": "admin",
                 "is_active": True,
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
+                "created_at": now_brasilia_iso(),
+                "updated_at": now_brasilia_iso(),
             }
         )
         self._save_index()
@@ -105,7 +105,7 @@ class AuthStorage:
         if self._get_raw_user_by_username(username):
             raise ValueError("Nome de usuário já existe")
 
-        now = datetime.now().isoformat()
+        now = now_brasilia_iso()
         user = {
             "id": str(uuid.uuid4()),
             "username": username,
@@ -128,6 +128,6 @@ class AuthStorage:
             return None
 
         user["role"] = role
-        user["updated_at"] = datetime.now().isoformat()
+        user["updated_at"] = now_brasilia_iso()
         self._save_index()
         return self._sanitize_user(user)

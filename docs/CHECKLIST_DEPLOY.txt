@@ -1,0 +1,196 @@
+╔══════════════════════════════════════════════════════════════════╗
+║              CHECKLIST DE DEPLOY - AUTISM.IA                     ║
+╚══════════════════════════════════════════════════════════════════╝
+
+📋 O QUE VOCÊ PRECISA PARA DEPLOY EM PRODUÇÃO:
+
+┌──────────────────────────────────────────────────────────────────┐
+│ 1. ✅ GOOGLE_API_KEY (OBRIGATÓRIO)                               │
+└──────────────────────────────────────────────────────────────────┘
+   ⚫ Onde obter: https://aistudio.google.com/app/apikey
+   ⚫ É gratuito
+   ⚫ Necessário para o RAG Engine e geração de PEIs
+   ⚫ Colocar no arquivo .env como: GOOGLE_API_KEY=sua_chave_aqui
+   ⚫ Necessária para RAG e geração de PEIs
+
+┌──────────────────────────────────────────────────────────────────┐
+│ 2. ✅ AUTH_JWT_SECRET (OBRIGATÓRIO)                              │
+└──────────────────────────────────────────────────────────────────┘
+   ⚫ Segredo para assinatura dos tokens JWT
+   ⚫ Exemplo no .env: AUTH_JWT_SECRET=troque-por-um-segredo-forte
+   ⚫ Use valor único e forte em produção
+
+┌──────────────────────────────────────────────────────────────────┐
+│ 3. ✅ DEBUG=False (OBRIGATÓRIO EM PRODUÇÃO)                      │
+└──────────────────────────────────────────────────────────────────┘
+   ⚫ No arquivo .env, mudar DEBUG=True para DEBUG=False
+   ⚫ Importante para segurança e performance
+
+┌──────────────────────────────────────────────────────────────────┐
+│ 4. ✅ CREDENCIAIS ADMIN INICIAIS                                  │
+└──────────────────────────────────────────────────────────────────┘
+   ⚫ AUTH_ADMIN_USERNAME=admin
+   ⚫ AUTH_ADMIN_PASSWORD=troque-esta-senha
+   ⚫ Recomendado trocar senha padrão após primeiro login
+
+┌──────────────────────────────────────────────────────────────────┐
+│ 5. ✅ IP/DOMÍNIO DO SERVIDOR (OBRIGATÓRIO)                       │
+└──────────────────────────────────────────────────────────────────┘
+   ⚫ O IP público onde a aplicação vai rodar
+   ⚫ Exemplo: 123.45.67.89 ou meudominio.com
+   ⚫ Usar no frontend para conectar ao backend
+
+┌──────────────────────────────────────────────────────────────────┐
+│ 6. ⚠️  PORTAS LIBERADAS NO FIREWALL                              │
+└──────────────────────────────────────────────────────────────────┘
+   ⚫ Porta 5000 (Backend)
+   ⚫ Porta 3000 (Frontend) ou 80/443 se usar Nginx
+   ⚫ Comandos Ubuntu/Debian:
+     sudo ufw allow 5000
+     sudo ufw allow 3000
+
+┌──────────────────────────────────────────────────────────────────┐
+│ 7. 📁 ARMAZENAMENTO DE DADOS (INFORMAÇÃO)                        │
+└──────────────────────────────────────────────────────────────────┘
+   ⚫ A aplicação NÃO usa banco de dados tradicional
+   ⚫ Dados armazenados em arquivos JSON
+   ⚫ ChromaDB usado apenas para embeddings (RAG)
+   ⚫ Usuários em backend/users/index.json
+   ⚫ Auditoria em backend/audit_logs/events.jsonl
+   ⚫ Fazer backup da pasta backend/ regularmente
+
+╔══════════════════════════════════════════════════════════════════╗
+║                    OPÇÕES DE CONFIGURAÇÃO                        ║
+╚══════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────┐
+│ OPÇÃO 1: Setup Automático (RECOMENDADO)                         │
+└──────────────────────────────────────────────────────────────────┘
+
+   bash backend/scripts/setup_production.sh
+
+   ✓ Configura tudo automaticamente
+   ✓ Pede GOOGLE_API_KEY
+   ✓ Configura frontend com o IP do servidor
+   ✓ Instala dependências
+
+┌──────────────────────────────────────────────────────────────────┐
+│ OPÇÃO 2: Configuração Manual                                    │
+└──────────────────────────────────────────────────────────────────┘
+
+   1. Copiar backend/.env.example para backend/.env:
+      cp backend/.env.example backend/.env
+
+   2. Editar backend/.env:
+      nano backend/.env
+      
+      # Trocar estas linhas:
+      DEBUG=False
+      GOOGLE_API_KEY=<sua_chave_aqui>
+
+   3. Configurar Frontend:
+      # Criar frontend/.env
+      echo "VITE_API_BASE_URL=http://SEU_IP:5000/api" > frontend/.env
+
+   4. Instalar dependências:
+      pip install -r backend/requirements.txt
+      cd frontend && npm install
+
+╔══════════════════════════════════════════════════════════════════╗
+║                    COMO INICIAR                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────┐
+│ Backend:                                                         │
+└──────────────────────────────────────────────────────────────────┘
+   cd backend
+   python app.py
+
+┌──────────────────────────────────────────────────────────────────┐
+│ Frontend (em outro terminal):                                   │
+└──────────────────────────────────────────────────────────────────┘
+   cd frontend
+   npm run build
+   npx serve -s dist -l 3000
+
+┌──────────────────────────────────────────────────────────────────┐
+│ Acessar aplicação:                                              │
+└──────────────────────────────────────────────────────────────────┘
+   http://SEU_IP:3000
+
+╔══════════════════════════════════════════════════════════════════╗
+║              MANTER APLICAÇÃO RODANDO (PM2)                      ║
+╚══════════════════════════════════════════════════════════════════╝
+
+   # Instalar PM2
+   npm install -g pm2
+
+   # Iniciar backend
+   pm2 start backend/app.py --name autism-backend --interpreter python3
+
+   # Iniciar frontend
+   pm2 start "npx serve -s frontend/dist -l 3000" --name autism-frontend
+
+   # Salvar e auto-iniciar
+   pm2 save
+   pm2 startup
+
+╔══════════════════════════════════════════════════════════════════╗
+║                    ARQUIVOS CRIADOS                              ║
+╚══════════════════════════════════════════════════════════════════╝
+
+   ✓ .env.example          - Template do arquivo de configuração
+   ✓ DEPLOYMENT_GUIDE.md   - Guia completo de deploy
+   ✓ setup_production.sh   - Script de configuração automática
+   ✓ CHECKLIST_DEPLOY.txt  - Este arquivo
+
+╔══════════════════════════════════════════════════════════════════╗
+║                    PROBLEMAS COMUNS                              ║
+╚══════════════════════════════════════════════════════════════════╝
+
+   ❌ "GOOGLE_API_KEY não configurada"
+   → Verifique o arquivo backend/.env
+
+   ❌ Frontend não conecta ao backend
+   → Verifique se o IP está correto no frontend/.env
+   → Verifique se a porta 5000 está aberta
+
+   ❌ "Connection refused"
+   → Backend não está rodando
+   → Firewall bloqueando a porta
+
+   ❌ CORS error
+   → Backend deve ter CORS habilitado (já está configurado)
+
+╔══════════════════════════════════════════════════════════════════╗
+║                    SEGURANÇA IMPORTANTE                          ║
+╚══════════════════════════════════════════════════════════════════╝
+
+   ⚠️  NUNCA commitar o arquivo .env (já está no .gitignore)
+   ⚠️  Usar HTTPS em produção (configure Nginx + Let's Encrypt)
+   ⚠️  Manter DEBUG=False em produção
+   ⚠️  Definir AUTH_JWT_SECRET forte e trocar senha admin padrão
+   ⚠️  Fazer backup regular dos arquivos JSON (schools/, students/, etc.)
+   ⚠️  Monitorar logs regularmente
+
+╔══════════════════════════════════════════════════════════════════╗
+║                    PRECISA DE AJUDA?                             ║
+╚══════════════════════════════════════════════════════════════════╝
+
+   📖 Leia: DEPLOYMENT_GUIDE.md (guia completo)
+   📖 Leia: ../../README.md (visão geral do projeto)
+   📖 Leia: SETUP.md (configuração de desenvolvimento)
+
+╔══════════════════════════════════════════════════════════════════╗
+║                 RESUMO DO QUE VOCÊ PRECISA                       ║
+╚══════════════════════════════════════════════════════════════════╝
+
+   1. GOOGLE_API_KEY de https://aistudio.google.com/app/apikey
+   2. AUTH_JWT_SECRET forte
+   3. AUTH_ADMIN_USERNAME e AUTH_ADMIN_PASSWORD
+   4. IP do seu servidor
+   5. Portas 5000 e 3000 abertas no firewall
+   6. Python 3.12+ e Node.js 20 LTS+ (recomendado 20.19+) instalados
+
+   Pronto! Execute: bash backend/scripts/setup_production.sh
+

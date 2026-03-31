@@ -1,8 +1,9 @@
 """Armazenamento append-only de eventos de auditoria."""
 import json
 import os
-from datetime import datetime
 from typing import Dict, List, Optional
+
+from time_utils import now_brasilia_iso
 
 
 class AuditStorage:
@@ -25,7 +26,7 @@ class AuditStorage:
         details: Optional[Dict] = None,
     ):
         event = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now_brasilia_iso(),
             "action": action,
             "path": path,
             "method": method,

@@ -30,5 +30,21 @@
     ],
     "notes": "Teste",
     "updated_at": "2026-03-24T19:34:23.379015"
+  },
+  {
+    "id": "36fb5a01-c1ce-4010-ad38-2c63c724ee7f",
+    "name": "Mariane Silva",
+    "age": "7",
+    "school_id": "a9a4c4c3-cecf-47bf-b831-a542af348559",
+    "school_name": "ESCOLA MUNICIPAL ALMERINDA VALENTE DE LIMA",
+    "grade": "2",
+    "class": "3",
+    "guardians": [
+      "Eliana da Silva",
+      "Carlos Roberto da Silva Junior"
+    ],
+    "notes": "",
+    "created_at": "2026-03-29T18:47:45.640858",
+    "updated_at": "2026-03-29T18:47:45.640869"
   }
 ]

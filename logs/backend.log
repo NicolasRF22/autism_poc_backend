@@ -1,0 +1,141 @@
+nohup: ignoring input
+ * Serving Flask app 'app'
+ * Debug mode: on
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.25.127.166:5000
+[33mPress CTRL+C to quit[0m
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 842-613-411
+127.0.0.1 - - [24/Feb/2026 01:58:48] "OPTIONS /api/rag/generate-pei HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 01:59:39] "POST /api/rag/generate-pei HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 01:59:39] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 01:59:45] "GET /api/rag/peis/dc5422f2-de43-431f-b5c0-16cbd364e614/pdf HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 01:59:46] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+127.0.0.1 - - [24/Feb/2026 02:00:33] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:00:36] "[36mGET /api/rag/peis/dc5422f2-de43-431f-b5c0-16cbd364e614/pdf HTTP/1.1[0m" 304 -
+127.0.0.1 - - [24/Feb/2026 02:00:40] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:21] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:21] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:21] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:25] "OPTIONS /api/rag/peis/4a33a37a-0259-413f-9b9c-51d5efef1c81 HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:26] "DELETE /api/rag/peis/4a33a37a-0259-413f-9b9c-51d5efef1c81 HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:26] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:32] "OPTIONS /api/rag/peis/db479fcb-39da-4970-809b-077d6a2875b7 HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:32] "DELETE /api/rag/peis/db479fcb-39da-4970-809b-077d6a2875b7 HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:32] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:35] "OPTIONS /api/rag/peis/6260494b-a643-4ec3-8d2e-19656627a8ca HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:35] "DELETE /api/rag/peis/6260494b-a643-4ec3-8d2e-19656627a8ca HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:35] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:02:47] "[36mGET /api/rag/peis/dc5422f2-de43-431f-b5c0-16cbd364e614/pdf HTTP/1.1[0m" 304 -
+127.0.0.1 - - [24/Feb/2026 02:05:46] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:05:46] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:05:54] "GET /api/rag/peis?student_name=Gabriel+Test&school=Maria+Mota HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:05:56] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:05:59] "OPTIONS /api/rag/peis/dc5422f2-de43-431f-b5c0-16cbd364e614 HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:05:59] "DELETE /api/rag/peis/dc5422f2-de43-431f-b5c0-16cbd364e614 HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:05:59] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:16:34] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 02:16:34] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 19:30:54] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 19:30:54] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:00:03] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:00:03] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:00:04] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:00:19] "OPTIONS /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:00:26] "POST /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:01:30] "OPTIONS /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:01:40] "POST /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:01:56] "OPTIONS /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:02:00] "POST /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:02:28] "OPTIONS /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:02:33] "POST /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:02:48] "OPTIONS /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:02:55] "POST /api/rag/chat HTTP/1.1" 200 -
+ * Detected change in '/home/nicolas/Aut/backend/document_processor.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 842-613-411
+ * Detected change in '/home/nicolas/Aut/backend/vector_store.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 842-613-411
+ * Detected change in '/home/nicolas/Aut/backend/rag_engine.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 842-613-411
+ * Detected change in '/home/nicolas/Aut/backend/rag_engine.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 842-613-411
+ * Detected change in '/home/nicolas/Aut/backend/rag_engine.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 842-613-411
+ * Detected change in '/home/nicolas/Aut/backend/app.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 842-613-411
+ * Detected change in '/home/nicolas/Aut/backend/app.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 842-613-411
+127.0.0.1 - - [24/Feb/2026 20:17:37] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:17:37] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:17:42] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:17:57] "OPTIONS /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:18:03] "POST /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:18:25] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:18:25] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:18:33] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:18:33] "GET /api/rag/students HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:18:47] "GET /api/rag/peis?student_name=Gabriel+Test&school=Maria+Mota HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:18:48] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:19:02] "OPTIONS /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:19:08] "POST /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:19:09] "OPTIONS /api/rag/generate-pei HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:20:08] "POST /api/rag/generate-pei HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:20:08] "GET /api/rag/peis?student_name=Alvina+Test&school=Almerinda HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:20:48] "GET /api/rag/peis/f98fb6c6-eb61-4c1e-955e-1747242cf689/pdf HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:21:51] "OPTIONS /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:21:55] "POST /api/rag/chat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:29:44] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:29:44] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:29:53] "GET /api/forms/mchat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:29:53] "GET /api/forms/mchat HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:29:56] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:29:56] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:59:27] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [24/Feb/2026 20:59:27] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 00:34:28] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 00:34:29] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 00:43:15] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 00:43:15] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 00:44:27] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 00:44:28] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 01:08:30] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 01:08:30] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 01:08:31] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 01:08:31] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 08:48:25] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 08:48:25] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 12:17:38] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 12:17:38] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 13:25:08] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 13:25:08] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 13:25:34] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 13:25:34] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 16:34:03] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 16:34:03] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 16:40:31] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 16:40:31] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 18:22:06] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 18:22:06] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 18:57:26] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 18:57:26] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 19:17:54] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 19:17:55] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [26/Feb/2026 07:48:07] "GET /api/forms HTTP/1.1" 200 -
+127.0.0.1 - - [26/Feb/2026 07:48:07] "GET /api/forms HTTP/1.1" 200 -

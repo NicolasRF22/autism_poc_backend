@@ -1,0 +1,192 @@
+Cadastro do Aluno
+
+A primeira parte do Estudo de Caso é o cadastro do aluno!
+Precisamos que o usuário responda as perguntas abaixo para podermos criar o Estudo de Caso personalizado da criança!
+Após isso, vamos conseguir entender o contexto educacional do estudante para darmos seguimento em nosso processo.
+
+Seção 1 - Cadastral
+Nome do Aluno;
+Idade do Aluno;
+Nome da Mãe;
+Nome do Pai;
+Nome da escola em que estuda;
+Ano escola do Aluno
+Turma do Aluno;
+Nome do Professor Regente 1 do aluno;
+Nome do Professor Regente 2 (Apoio) do aluno;
+
+Seção 2 - Informações pessoais do Aluno
+Excelente! Após preencher os dados do aluno, vamos precisar de algumas informações pessoais sobre o comportamento dele, isso é essencial para criarmos uma análise personalizada!
+São 16 perguntas e é muito importante que você forneça o máximo de detalhes em suas respostas!
+
+O Aluno gosta da escola?;
+Tem alguma observação para a pergunta acima?;
+O Aluno tem amigos?;
+No caso de ter amigos, quem são?;
+O Aluno tem um colega predileto?;
+No caso de ter um colega predileto, quem é?;
+Quais são as atividades favoritas do Aluno?;
+Quais são as tarefas mais difíceis na opinião do Aluno? Qual é motivo para isso?;
+O Aluno expressa suas necessidades, desejos e interesses? De qual maneira?;
+O Aluno costuma pedir ajuda aos professores? Por quê?;
+Qual é a opinião do Aluno sobre seus professores?;
+Qual é a  opinião do Aluno sobre a importância dele ir a escola e estudar?;
+Cite quais são os apoios que o Aluno possui na escola;
+O Aluno está satisfeito com os apoios que dispõe no momento?;
+Desejaria ter outros? Quais?;
+O aluno tem algum gosto especial específico (por exemplo Hiperfoco)?.
+
+Seção 3 - Informações sobre a escola do Aluno
+Depois de preenchidos os dados pessoais e as informações pessoais do Aluno, agora precisamos entender mais sobre o ambiente escolar em que ele está inserido e como ele se comporta nele.
+Para isso, responda com sinceridade as 16 perguntas abaixo!
+
+O aluno participa de todas as atividades e interage em todos os espaços da escola? Quais são estes espaços? Como ele participa? Se não participa, por quê?;
+Das atividades propostas para a turma, quais ele realiza com facilidade e quais ele não realiza ou realiza com dificuldades? Por quê?;
+Como é a participação do aluno nas atividades propostas à sua turma? Participa das atividades integralmente, particialmente ou não participa?;
+Quais são as necessidades específicas do aluno? Quais são as barreiras impostas pelo ambiente escolar?;
+Que tipo de atendimento educacional e/ou clínico o aluno já recebe e quais são os profissionais envolvidos?;
+O que os professores pensam sobre interesses e expectativas do aluno em relação à sua formação escolar?;
+Qual a avaliação que o professor de sala de aula faz sobre o desempenho escolar desse aluno?;
+Quais as preocupações apontadas pelo professor de sala de aula e quais os apoios que ele sugere para que o aluno atinja os objetivos educacionais traçados para sua turma?;
+Como a comunidade escolar percebe a interação do aluno com seus colegas de turma?;
+Quais as expectativas escolares do professor em relação a esse aluno?;
+Quais são as principais habilidades e potencialidades do aluno, segundo os professores?;
+Qual é o motivo que levou o professor de sala de aula solicitar os serviços do AEE para esse aluno?;
+A escola dispõe de recursos de acessibilidade para o aluno? Quais? Quais os recursos humanos e materiais de que a escola não dispõe e que são necessários para esse aluno?;
+Quem avaliou os recursos utilizados por esse aluno? Eles atendem às suas necessidades?;
+Como é o envolvimento afetivo, social da turma com o aluno? Detalhe;
+Qual é a opinião da escola (equipe pedagógica, diretor, professores, colegas de turma) sobre seu desenvolvimento escolar?.
+
+Seção 4 - Informações familiares sobre o Aluno
+Para a quarta parte do nosso questionário é preciso que seja preenchido as 5 perguntas abaixo.
+Elas nos ajudarão a entender ainda mais sobre as necessidades do aluno!
+
+Qual é a opinião da família sobre a vida escolar do aluno?;
+A família se envolve com a escola? Participa de reuniões, de comemorações entre outras atividades da escola?;
+Tem consciência dos direitos de seu filho à educação inclusiva? Exige a garantia de seus direitos?;
+A família identifica habilidades, necessidades e dificuldades na vida pessoal e escolar do aluno? Quais?;
+Quais as expectativas da família com relação ao desenvolvimento e escolarização de seu filho?.
+
+Seção 5 - Questionário Complementar
+Para essa última etapa, precisamos que sejam respondido uma série de perguntas que abordam 6 categorias: Social, Afetivo, Cognitivo, Motor, Alimentação e Familiar.
+
+Social
+O aluno interage com colegas durante atividades em grupo sem mediação constante?;
+	- Sim;
+	- Não.
+Ele consegue iniciar interações sociais espontaneamente?;
+	- Sim;
+	- Não.
+Participa de atividades sociais propostas pela escola quando há estímulos adequados?;
+	- Sim;
+	- Não.
+Consegue esperar sua vez e reagir adequadamente a frustrações em jogos ou atividades sociais?;
+	- Sim;
+	- Não.
+Demonstra interesse em compartilhar experiências ou prefere interações mais limitadas?;
+	- Sim;
+	- Não.
+Caso tenha algo de relevante sobre a área SOCIAL, insira abaixo.
+
+Afetivo
+O aluno demonstra emoções básicas, como alegria ou frustração, de forma clara?;
+	- Sim;
+	- Não.
+Reage positivamente a elogios e estímulos motivacionais?;
+	- Sim;
+	- Não.
+Busca apoio emocional quando enfrenta dificuldades?;
+	- Sim;
+	- Não.
+Fica desregulado emocionalmente com mudanças na rotina escolar?;
+	- Sim;
+	- Não.
+Consegue se acalmar sozinho ou com ajuda mínima após momentos de desregulação?;
+	- Sim;
+	- Não.
+Caso tenha algo de relevante sobre a área AFETIVA, insira abaixo.
+
+Cognitivo
+O aluno demonstra interesse em aprender coisas novas ou explorar áreas de interesse específico?;
+	- Sim;
+	- Não.
+Consegue compreender e seguir instruções simples sem mediação constante?;
+	- Sim;
+	- Não.
+Mantém a atenção nas atividades propostas por períodos adequados à sua idade?;
+	- Sim;
+	- Não.
+Resolve problemas simples de forma independente ou com suporte mínimo?;
+	- Sim;
+	- Não.
+Aprende melhor com suporte visual do que com instruções apenas verbais?;
+	- Sim;
+	- Não.
+Caso tenha algo de relevante sobre a área COGNITIVA, insira abaixo:.
+
+Motor
+O aluno apresenta coordenação motora fina suficiente para segurar lápis ou manipular objetos pequenos?;
+	- Sim;
+	- Não.
+Demonstra coordenação motora grossa para correr, pular ou subir escadas?;
+	- Sim;
+	- Não.
+Realiza tarefas de autocuidado, como vestir-se ou abrir lancheiras, de forma independente?;
+	- Sim;
+	- Não.
+Participa de atividades físicas ou recreativas sem sinais de cansaço excessivo?;
+	- Sim;
+	- Não.
+Apresenta comportamentos motores repetitivos ou resistência a novos desafios motores?;
+	- Sim;
+	- Não.
+Caso tenha algo de relevante sobre a área MOTORA, insira abaixo.
+
+Alimentação
+O aluno possui um repertório alimentar muito restrito na escola(ex: aceita menos de 10 alimentos diferentes)?;
+	- Sim;
+	- Não;
+	- Não se alimenta na escola.
+O aluno necessita de auxílio físico direto de um adulto para se alimentar (ex: para usar talheres, cortar a comida)?;
+	- Sim;
+	- Não;
+	- Não se alimenta na escola.
+O aluno demonstra forte incômodo ou recusa em comer se diferentes alimentos se tocarem no mesmo prato?;
+	- Sim;
+	- Não;
+	- Não se alimenta na escola;
+	- Não se aplica.
+O aluno se alimenta de forma visivelmente mais tranquila em um ambiente com menos barulho e pessoas do que no refeitório principal?;
+	- Sim;
+	- Não;
+	- Não se alimenta na escola;
+	- Não se aplica.
+O aluno apresenta comportamentos desafiadores (ex: choro intenso, agitação, recusa em permanecer sentado) de forma recorrente durante as refeições na escola?;
+	- Sim;
+	- Não;
+	- Não se alimenta na escola;
+	- Não se aplica.
+Caso tenha algo de relevante sobre a área de ALIMENTAÇÃO, insira abaixo.
+
+Familiar
+A família participa de reuniões e eventos relacionados ao desenvolvimento do aluno?;
+	- Sim;
+	- Não.
+Existe comunicação frequente entre a família e a escola para alinhar estratégias pedagógicas?;
+	- Sim;
+	- Não.
+A família oferece suporte emocional consistente e incentiva a autonomia do aluno?;
+	- Sim;
+	- Não.
+Há colaboração familiar no uso de recursos terapêuticos ou adaptações sugeridas?;
+	- Sim;
+	- Não.
+A família está aberta a novas abordagens ou sugestões para apoiar o aluno?;
+	- Sim;
+	- Não.
+Caso tenha algo de relevante sobre a área FAMILIAR, insira abaixo.
+
+Seção 6 - Questões Pedagógicas
+
+Relate como são as adaptações pedagógicas realizadas com o aluno;
+Relate como é o desenvolvimento pedagógico do aluno em suas competências e habilidades.

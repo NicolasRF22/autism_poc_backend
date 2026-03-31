@@ -2,8 +2,9 @@
 import os
 import json
 import uuid
-from datetime import datetime
 from typing import List, Dict, Optional
+
+from time_utils import now_brasilia_iso
 
 
 class PEIStorage:
@@ -37,7 +38,7 @@ class PEIStorage:
             "id": pei_id,
             "student_name": student_name,
             "school": school,
-            "created_at": datetime.now().isoformat(),
+            "created_at": now_brasilia_iso(),
             "pdf_filename": os.path.basename(pdf_path),
             "markdown": markdown_text,
         }

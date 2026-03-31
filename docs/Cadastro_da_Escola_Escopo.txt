@@ -1,0 +1,92 @@
+Cadastro da Escola
+
+O objetivo desse formulário é mapear e cadastrar instituições educacionais que oferecem atendimento especializado a estudantes com Transtorno do Espectro Autista (TEA). 
+Por meio de perguntas estruturadas em 8 seções, buscamos coletar informações abrangentes sobre a infraestrutura, qualificação profissional e práticas pedagógicas inclusivas das escolas.
+As informações fornecidas contribuirão para a criação de um banco de dados que vai servir de referência para famílias que buscam ambientes educacionais adequados às necessidades de seus filhos com TEA, além de possibilitar o desenvolvimento de políticas públicas e ações de formação continuada mais direcionadas. 
+Todos os dados serão tratados com confidencialidade e utilizados exclusivamente para fins de mapeamento, pesquisa e aprimoramento dos serviços educacionais inclusivos.
+Agradecemos sua participação e colaboração para a construção de uma educação mais inclusiva e respeitosa à neurodiversidade!
+
+Seção 1 - Dados Cadastrais da Instituição
+
+Nome completo da instituição;
+CNPJ da instituição;
+Tipo de Instituição;
+Horário de Funcionamento;
+Endereço completo:
+	- Exemplo: "Rua: xxxxxxxxx, N°xx, Bairro, Cidade - Estado, CEP";
+Telefone para contato:
+	- Exemplo: (XX) 9XXXX-XXXX;
+E-mail institucional;
+Site.
+
+Seção 2 - Estrutura e Capacidade
+
+Níveis de ensino oferecidos
+	- Educação Infantil;
+	- Ensino Fundamental I;
+	- Ensino Fundamental II;
+	- Ensino Médio;
+	- Outro:.
+Número total de alunos na instituição;
+Número de alunos com TEA atualmente matriculados;
+Capacidade máxima para alunos com TEA;
+Número de salas de aula;
+Possui salas de recursos multifuncionais? Se sim, quantas?;
+Possui espaços sensoriais ou salas de descompressão? Descreva;
+Acessibilidade física: quais adaptações a escola possui?.
+
+Seção 3 - Equipe e Capacitação
+
+Número total de professores;
+Número de professores com formação específica em Educação Especial;
+Número de professores com formação específica em TEA;
+A escola conta com equipe multidisciplinar? Quais profissionais?;
+Frequência de capacitação da equipe em TEA:
+	- Mensal;
+	- Trimestral;
+	- Semestral;
+	- Anual;
+	- Outro:.
+Tipos de metodologias que a equipe foi capacitada (ABA, TEACCH, Denver, etc);
+Número de mediadores/professores de apoio disponíveis;
+Qual a proporção aluno-mediador praticada pela instituição?.
+
+Seção 4 - Suporte Pedagógico e Inclusão
+
+A escola trabalha com adaptação curricular? Como é realizada?;
+Quais metodologias de ensino são aplicadas especificamente para alunos com TEA?;
+Como é feito o Plano de Ensino Individualizado (PEI)?;
+Como é realizada a avaliação dos alunos com TEA?;
+Quais recursos de Comunicação Alternativa são utilizados? (PECS, pranchas de comunicação, etc.);
+A escola utiliza recursos visuais para rotina e organização? Quais?;
+Como é realizada a integração entre alunos neurotípicos e alunos com TEA?.
+
+Seção 5 - Estrutura Sensorial e Adaptativa
+
+A escola possui controle de estímulos sensoriais? (iluminação, som, etc.);
+Quais materiais adaptados estão disponíveis para alunos com TEA?;
+Existem espaços específicos para momentos de crise ou sobrecarga sensorial?;
+A escola oferece adaptações para o intervalo/recreio?;
+Quais recursos tecnológicos são utilizados como apoio aos alunos com TEA?;
+São oferecidos materiais com peso (coletes, cobertores, etc.) para regulação sensorial?.
+
+Seção 6 - Parceria Família-Escola
+Como é realizada a comunicação diária com as famílias?;
+Qual a frequência de reuniões específicas com pais de alunos com TEA?;
+A escola oferece orientações para continuidade do trabalho em casa?;
+Existe grupo de apoio para famílias de alunos com TEA?;
+A escola promove eventos/atividades que incluam as famílias?.
+
+Seção 7 - Suporte Clínico e Parcerias
+A escola aceita a entrada de terapeutas externos para acompanhamento?;
+Possui parcerias com clínicas ou profissionais especializados em TEA?;
+Como é feita a integração entre o trabalho pedagógico e terapêutico?;
+A escola participa de redes de apoio à inclusão?;
+Existe algum protocolo específico para administração de medicamentos, quando necessário?.
+
+Seção 8 - Documentação e Certificação
+A escola possui alguma certificação específica para atendimento a alunos com TEA?;
+Quais documentos são exigidos para matrícula de alunos com TEA?;
+A escola emite diários/relatórios periódicos de desenvolvimento? Com qual frequência?;
+Possui convênios com órgãos públicos para atendimento especializado?;
+Como é feito o registro e acompanhamento da evolução dos alunos com TEA?.

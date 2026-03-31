@@ -1,0 +1,92 @@
+DEBUG - PRIMEIROS 3 DIAS DO PDF
+Gerado em: 2026-03-23
+
+ARQUIVO
+- PDF: ../DIÁRIO ESCOLAR 2025 -  ALVINA.pdf
+- Fonte escolhida: native_pdf_text
+- OCR utilizado: false
+- Blocos detectados: 201
+- Warnings globais: []
+
+===== DIA 1 =====
+Data: 2025-02-10
+Páginas: 1 - 1
+Aluno: Alvina Almeida Bas tos Bisne ta
+Professores:
+- Est�fany Guimar �es dos R eis 1 "Registrar abaix o se o aluno apr esen tou crise
+- birr a ou outr o comport amen to dis t
+
+Respostas capturadas:
+- lanchou: Não
+- participou_brincadeira: [NÃO CAPTURADO]
+- atencao_professora: [NÃO CAPTURADO]
+- interesse_atividades: [NÃO CAPTURADO]
+- realizou_atividades: [NÃO CAPTURADO]
+- uso_banheiro: [NÃO CAPTURADO]
+- cumpriu_combinados: [NÃO CAPTURADO]
+
+Warnings do parser:
+- Resposta não encontrada para: participou_brincadeira
+- Resposta não encontrada para: atencao_professora
+- Resposta não encontrada para: interesse_atividades
+- Resposta não encontrada para: realizou_atividades
+- Resposta não encontrada para: uso_banheiro
+- Resposta não encontrada para: cumpriu_combinados
+
+Observações: [VAZIO]
+
+===== DIA 2 =====
+Data: 2025-02-11
+Páginas: 2 - 3
+Aluno: Alvina Almeida Bas tos Bisne ta
+Professores:
+- Est�fany Guimar �es dos R eis 2 "Registrar abaix o se o aluno apr esen tou crise
+- birr a ou outr o comport amen to dis
+
+Respostas capturadas:
+- lanchou: [NÃO CAPTURADO]
+- participou_brincadeira: [NÃO CAPTURADO]
+- atencao_professora: [NÃO CAPTURADO]
+- interesse_atividades: [NÃO CAPTURADO]
+- realizou_atividades: [NÃO CAPTURADO]
+- uso_banheiro: [NÃO CAPTURADO]
+- cumpriu_combinados: [NÃO CAPTURADO]
+
+Warnings do parser:
+- Resposta não encontrada para: lanchou
+- Resposta não encontrada para: participou_brincadeira
+- Resposta não encontrada para: atencao_professora
+- Resposta não encontrada para: interesse_atividades
+- Resposta não encontrada para: realizou_atividades
+- Resposta não encontrada para: uso_banheiro
+- Resposta não encontrada para: cumpriu_combinados
+
+Observações: [VAZIO]
+
+===== DIA 3 =====
+Data: 2025-02-12
+Páginas: 3 - 4
+Aluno: Alvina Almeida Bas tos Bisne ta
+Professores:
+- Est�fany Guimar �es dos R eis Lanchou? Participou da brincadeira
+- atividade coletiva? Deu aten��o � fala da professora
+
+Respostas capturadas:
+- lanchou: [NÃO CAPTURADO]
+- participou_brincadeira: [NÃO CAPTURADO]
+- atencao_professora: [NÃO CAPTURADO]
+- interesse_atividades: [NÃO CAPTURADO]
+- realizou_atividades: [NÃO CAPTURADO]
+- uso_banheiro: [NÃO CAPTURADO]
+- cumpriu_combinados: [NÃO CAPTURADO]
+
+Warnings do parser:
+- Resposta não encontrada para: lanchou
+- Resposta não encontrada para: participou_brincadeira
+- Resposta não encontrada para: atencao_professora
+- Resposta não encontrada para: interesse_atividades
+- Resposta não encontrada para: realizou_atividades
+- Resposta não encontrada para: uso_banheiro
+- Resposta não encontrada para: cumpriu_combinados
+
+Observações: [VAZIO]

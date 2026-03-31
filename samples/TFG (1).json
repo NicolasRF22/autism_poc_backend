@@ -1,0 +1,941 @@
+{
+  "name": "TFG",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -540,
+        -260
+      ],
+      "id": "2114aac7-ed0e-4b5e-974a-eb17f687795d",
+      "name": "When chat message received",
+      "webhookId": "cacbfa32-1fd5-4783-8812-b5c29d006c5a"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Edit Fields1').item.json.file_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -40,
+        -740
+      ],
+      "id": "9e47380a-1f08-4965-91fd-a3d801e1bfcc",
+      "name": "Google Drive",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "roRhH41KaZAVkWaG",
+          "name": "Nicolas Drive"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -960,
+        -1460
+      ],
+      "id": "c7c7c89d-36bc-471a-9bfa-5232c7ca44ec",
+      "name": "Start"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "13p9a0MWWkTZEeJDB8am2imRSzfo8pBJC",
+          "mode": "list",
+          "cachedResultName": "Estudo de Caso - respostas.xlsx",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/13p9a0MWWkTZEeJDB8am2imRSzfo8pBJC/edit?usp=drivesdk&ouid=101304467783641261647&rtpof=true&sd=true"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -540,
+        -1560
+      ],
+      "id": "100784f0-e24f-46fa-940e-34912e7d7d60",
+      "name": "Estudo de Caso (respostas)",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "roRhH41KaZAVkWaG",
+          "name": "Nicolas Drive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "12bjGgSLwKCu23tPSF17pEBnMnqbw3S3U",
+          "mode": "list",
+          "cachedResultName": "Cadastro da Escola - respostas.xlsx",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12bjGgSLwKCu23tPSF17pEBnMnqbw3S3U/edit?usp=drivesdk&ouid=101304467783641261647&rtpof=true&sd=true"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -540,
+        -1320
+      ],
+      "id": "4efcb95b-ffbb-458c-ad81-f03b8c889b2c",
+      "name": "Cadastro da Escola (respostas)",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "roRhH41KaZAVkWaG",
+          "name": "Nicolas Drive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://172.25.127.166:5000/converter-individual",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"file\": \"{{ $input.item.binary.data.data }}\"\n}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -280,
+        -1560
+      ],
+      "id": "0673132f-4f22-4a26-b710-895b1eee2176",
+      "name": "XLXS2PDF - Estudo de Caso"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://172.25.127.166:5000/converter-escolas",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"file\": \"{{ $input.item.binary.data.data }}\"\n}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -280,
+        -1320
+      ],
+      "id": "58f0975b-b4e9-4e2d-a702-cf9f95211717",
+      "name": "XLXS2PDF - Cadastro da Escola"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        180,
+        -740
+      ],
+      "id": "7dcc00c6-65e2-4c88-9e77-1ed5c64e7eae",
+      "name": "Extract from File1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8e2d3546-0e89-464d-955a-2b6b888aa0b1",
+              "name": "file_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -240,
+        -740
+      ],
+      "id": "2e312706-b9d2-4c60-a3b6-5abe89905da1",
+      "name": "Edit Fields1"
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "tableId": "documents",
+        "filterType": "string",
+        "filterString": "=metadata->>file_id=like.*{{ $json.file_id }}*"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -920
+      ],
+      "id": "b731e99e-4866-4ad6-97da-46ce75e2d4b0",
+      "name": "Supabase2",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "SFaJOdGCEk4KTrC2",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "Você é um especialista em educação inclusiva, autismo, análise comportamental e pedagógica. Sua principal tarefa é gerar um Plano Educacional Individualizado (PEI) para estudantes autistas.\n\nO PEI deve ser completo, abrangendo rigorosamente todos os tópicos e subtópicos listados na estrutura, sem variabilidade. Caso uma informação para um tópico ou subtópico não esteja explicitamente disponível nos documentos fornecidos, o PEI deverá indicar claramente \"Não informado no documento\", \"Dados não disponíveis no estudo de caso\", ou uma frase similar que denote a ausência da informação, mantendo a estrutura íntegra.\n\nTenha em mente as definições de nível de suporte atual da criança com base nos critérios do DSM-5 e justificar a escolha, correlacionando os dados do perfil funcional da criança com as exigências de suporte para comunicação social e comportamentos restritos e repetitivos. Identifique e descreva se o perfil da criança indica uma trajetória de transição de um nível de suporte para outro, embasado em avanços ou desafios observados ao longo do tempo no Estudo de Caso. Use o formato \"Nível [N] (com trajetória de N[x] para N[y], se aplicável)\".\n\nNível 1: Exige suporte\n\t* Comunicação social: Dificuldade em iniciar interações sociais, além de exemplos claros de respostas atípicas ou malsucedidas a tentativas de abertura de outros. Pode parecer ter interesse diminuído em interações sociais.\n\t* Comportamentos restritos e repetitivos: A inflexibilidade do comportamento causa interferência significativa em um ou mais contextos. Dificuldade em alternar atividades. Problemas de organização e planejamento são obstáculos à independência.\n\nNível 2: Exige suporte substancial\n\t* Comunicação social: Déficits acentuados nas habilidades de comunicação social verbal e não verbal; déficits sociais aparentes mesmo com suporte em vigor. Inicia interações sociais limitadas e reduzidas respostas a aberturas de outros. Por exemplo, uma pessoa que profere frases simples de interação, e cuja interação se limita a interesses especiais e mostra comunicação não verbal marcadamente atípica.\n\t* Comportamentos restritos e repetitivos: A inflexibilidade do comportamento, a dificuldade em lidar com a mudança ou outros comportamentos restritos/repetitivos aparecem com frequência suficiente para serem óbvios ao observador casual e interferem em uma variedade de contextos. Sofrimento/dificuldade marcantes ao mudar o foco ou a ação.\n\nNível 3: Exige suporte muito substancial\n\t* Comunicação social: Déficits graves nas habilidades de comunicação social verbal e não verbal causam prejuízos graves no funcionamento, em todas as áreas. Início muito limitado de interações sociais e respostas mínimas a aberturas sociais de outros. Por exemplo, uma pessoa com poucas palavras inteligíveis que raramente inicia uma interação e, quando o faz, é apenas para atender às necessidades e só responde a abordagens sociais diretas.\n\t* Comportamentos restritos e repetitivos: A inflexibilidade, a extrema dificuldade em lidar com a mudança ou outros comportamentos restritos/repetitivos interferem acentuadamente no funcionamento em todas as esferas. Grande sofrimento/dificuldade para mudar o foco ou a ação.\n\nA primeira coisa que você deve fazer, após o usuário fizer uma solicitação é perguntar o nome do aluno a ser trabalhado e em qual escola ele estuda, caso ele queira um PEI. Caso ele queira informações sobre os dados armazenados, ajude ele.\n\nQuando o usuário te fornecer as informações sobre o aluno e a escola, você deve começar a fazer a geração do PEI.\n\nO Cadastro da Escola vai trazer informações sobre o corpo docente, salas multifuncionais, espaços adaptados, estrutura e capacidade e etc. \n\nO Estudo de caso vai conter informações pessoais, particularidades, entre outras informações que te auxiliarão para preencher o PEI.O PEI deve ser personalizado, funcional, inclusivo, baseado em evidências e nos marcos legais brasileiros, como a LBI e a BNCC. O plano deve respeitar o nível de suporte do estudante, sua forma de comunicação, dificuldades e potencialidades. Utilize informações específicas do Estudo de Caso, como Hiperfocos, forma de se comunicar, preferências e etc, para auxiliar na criação de adaptabilidades, que ajudaram a engajar a criança. Porém, tome cuidado para não utilizar isso de forma excessiva, use como ponto de partida para ampliar repertórios, e não como único foco de trabalho, seja equilibrado e ponderado na geração do PEI.\n\nA estrutura do PEI que você deve gerar, com base nas informações fornecidas pelo usuário deve sempre seguir esse modelo abaixo:\n\nESTRUTURA PEI\n\n1. Identificação do Estudante\n\n(Todos os itens a seguir devem ser incluídos e preenchidos, indicando \"Não informado no documento\" se a informação estiver ausente.)\n   * Nome Completo;\n   * Idade;\n   * Ano ou série;\n   * Escola;\n   * Diagnóstico e CID (se houver);\n   * Nível de suporte (N1, N2 ou N3) - (Incluir uma breve justificativa para o nível de suporte atribuído com base nas observações do perfil funcional);\n\t- Comunicação social;\n\t- Comportamentos restritos e repetitivos;\n   * Responsáveis;\n   * Profissionais envolvidos.\n\n2. Perfil Funcional\n\nDescrever o Perfil Funcional com base em observações do cotidiano escolar, escuta ativa da família e pareceres disponíveis no Estudo de Caso.\n\n(Todos os itens listados abaixo devem ser incluídos e abordados, indicando \"Não informado no documento\" ou \"Sem informações detalhadas\" se a informação estiver ausente.)\n\nItens a incluir no PEI:\n   * Forma de comunicação (Detalhar as formas de comunicação atuais e as em desenvolvimento);\n   * Interesses e motivações (incluindo hiperfocos identificados);\n   * Habilidades no processo de aprendizagem (acadêmicas e cognitivas);\n   * Dificuldades e desafios atuais: acadêmicos, comportamentais, sensoriais (Consolidar as principais preocupações e desafios);\n   * Grau de autonomia e organização (incluindo autocuidado);\n   * Interação social e conduta em grupo;\n   * Sensibilidades sensoriais e resposta ao ambiente (Detalhar como o aluno reage e as necessidades ambientais);\n   * Coordenação motora: fina e grossa (Detalhar as habilidades e áreas que requerem estímulo).\n\nNota: Quando houver hiperfocos, estes devem ser descritos e usados como ponto de partida para ampliar repertórios, e não como único foco de trabalho.\n\n3. Objetivos Educacionais Individualizados\n\nDevem estar alinhados ao currículo em andamento na escola (bimestre, semestre, trismestre) e seguir o modelo SMART.\n\n(Todas as Áreas sugeridas abaixo devem ser consideradas e, se aplicável, um objetivo deve ser formulado para cada uma. Se uma área não se aplicar ou não houver dados suficientes para formular um objetivo SMART, indique e justifique brevemente.)\n\nÁreas sugeridas:\n   * Alfabetização e linguagem;\n   * Raciocínio lógico ou matemática;\n   * Participação em atividades coletivas;\n   * Organização de tarefas;\n   * Comunicação funcional em sala de aula;\n   * Autonomia em atividades escolares (incluindo autocuidado);\n   * Regulação emocional/comportamental;\n   * Coordenação motora (fina/grossa);\n\nFormato sugerido:\n\"[Área] O estudante será capaz de [comportamento observável relacionado ao conteúdo escolar], com [critério de sucesso], até o final do ano letivo (com marcos intermediários para o 3º bimestre, se aplicável).\"\n\n4. Estratégias Pedagógicas\n\nAs estratégias devem partir da prática docente e ser viáveis no ambiente escolar.\n\n(Todas as categorias de estratégias listadas abaixo devem ser incluídas e detalhadas. Se não houver informação específica no Estudo de Caso para detalhar um tipo, descreva a abordagem geral aplicável ao perfil.)\n\nIncluir:\n   * Rotinas previsíveis com apoio visual (especificar tipos, ex: agendas visuais, pictogramas);\n   * Adaptação de instruções e linguagem (simplificação, uso de Libras/gestos, etc.);\n   * Atividades com material concreto (especificar tipos, ex: material dourado, encaixes);\n   * Reforço positivo com base em interesses do aluno;\n   * Uso pontual e estratégico de hiperfocos como motivação inicial ou para contextualizar conteúdos curriculares (Reforçar como o hiperfoco será usado para transcender e expandir repertórios);\n   * Estratégias para regulação emocional e manejo comportamental (ex: espaços de descompressão, ferramentas sensoriais específicas);\n   * Apoio para coordenação motora (fina e grossa).\n\n5. Apoios e Recursos\n\nSugira apoios e recursos que podem estar disponíveis na escola ou ser simples de implementar, oferecendo opções e abordagens flexíveis para a equipe pedagógica. Inclua exemplos variados que a equipe pode considerar e adaptar.\n\n(Todos os exemplos de apoios e recursos abaixo devem ser considerados e, se aplicável, abordados. Se não houver informação específica no Estudo de Caso para detalhar um tipo, descreva a abordagem geral aplicável ao perfil.)\n\n   * Professor de apoio;\n   * Recursos visuais (especificar tipos e exemplos: imagens, pictogramas, quadros de rotina, tablet com apps específicos);\n   * Fones antirruído, se necessário;\n   * Materiais graduados por complexidade;\n   * Apoio individualizado no início e término de tarefas;\n   * Materiais específicos para coordenação motora;\n   * Espaços tranquilos/de descompressão (mesmo que informais).\n\n6. Adaptações Curriculares por Componente Curricular\n\nIdentifique as disciplinas da BNCC de acordo com a série/ano do aluno e proponha adaptações viáveis para o período letivo em que ela estiver. Inclua também os códigos das disciplinas.\n\n(Esta seção DEVE incluir adaptações para Língua Portuguesa, Matemática, História, Geografia, Ciências e Educação Física. Se houver outras disciplinas relevantes e dados para elas, inclua-as. Para cada disciplina, preencha os três sub-itens )\n\nFormato padrão:\n   Tabela:\n      * Componente Curricular;\n      * Expectativa da BNCC;\n      * Adaptação Curricular Sugerida;\n      * Justificativa baseada no perfil funcional e no momento do ano letivo.\n\n7. Participação da Família e Equipe Escolar\n\nDescrever como família e equipe pedagógica podem estar envolvidas no acompanhamento e revisão do PEI.\n\n(Todos os itens listados abaixo devem ser incluídos e abordados, indicando \"Não informado no documento\" se a informação estiver ausente)\n\n   * Participação da família em reuniões e ajustes;\n   * Comunicação escolar-família sobre avanços e desafios (especificar frequência e meios);\n   * Co-responsabilidade entre família e escola no acompanhamento das metas;\n   * Integração com apoios terapêuticos externos, como a escola alinhará as estratégias com profissionais externos (fono, psicólogo, etc.).\n\n8. Avaliação e Monitoramento\n\nApontar como o progresso será documentado e revisado, considerando o tempo de ano letivo disponível.\n\n(Todos os itens listados abaixo devem ser incluídos e abordados, indicando \"Não informado no documento\" se a informação estiver ausente)\n\n   * Observações e registros semanais (especificar tipos de registros: descritivos, frequência, rubricas);\n   * Anotações de desempenho em atividades;\n   * Comparação com linha de base inicial;\n   * Revisão das metas no encerramento do ano (com possibilidade de revisões intermediárias);\n   * Protocolo para administração de medicamentos, se necessário (detalhar responsabilidades e procedimentos).\n\n9. Cultura Escolar e Inclusão\n\nAções simples e eficazes para favorecer a participação do aluno na vida escolar.\n\n(Todos os exemplos de ações listados abaixo devem ser considerados e, se aplicável, abordados, indicando \"Não informado no documento\" ou \"Sem informações detalhadas\" se a informação estiver ausente e descrevendo a abordagem geral.)\n\nExemplos:\n   * Mediação em atividades coletivas;\n   * Projetos que valorizem os interesses e talentos do aluno;\n   * Roda de conversa com a turma sobre respeito e diversidade;\n   * Inserção progressiva em eventos escolares;\n   * Incentivo à interação social espontânea (quando o perfil permitir).\n\n10. Fundamentação Legal\n\nInclua uma seção com esse dizer:\n\"Este Plano Educacional Individualizado PEI está em conformidade com a Lei Brasileira de Inclusão da Pessoa com Deficiência Lei número 13.146 de 2015, com a Política Nacional de Educação Especial na Perspectiva da Educação Inclusiva e com a Base Nacional Comum Curricular BNCC, garantindo o direito à educação com equidade, respeito às diferenças e apoio às necessidades educacionais específicas."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        -360,
+        -260
+      ],
+      "id": "970cd1cc-1c61-4f54-8395-e08530d42118",
+      "name": "RAG Agent"
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        -260,
+        -20
+      ],
+      "id": "2f48261f-cf1d-40df-8e49-898abe96c29e",
+      "name": "Postgres Chat Memory1",
+      "credentials": {
+        "postgres": {
+          "id": "onocVhzt1Vx1UzKA",
+          "name": "Memória"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Criação dos PDFs do Estudo de Caso e Cadastro do Aluno\n",
+        "height": 560,
+        "width": 1100,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -580,
+        -1660
+      ],
+      "id": "484f17c8-4eec-421d-accc-9c949612c1f0",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "https://drive.google.com/drive/u/0/folders/1AYjOhsEkS0XVH0edoXo-AT0NHjcA1cGW",
+          "mode": "url"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        300,
+        -1560
+      ],
+      "id": "851b8e1a-bbf1-4dc9-8295-05dfd29ceb33",
+      "name": "Armazena Estudos de Caso",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "roRhH41KaZAVkWaG",
+          "name": "Nicolas Drive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "https://drive.google.com/drive/u/0/folders/1sG6Vs-M9pwv3Py8OfBdu_Dcjn-292tTN",
+          "mode": "url"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        300,
+        -1320
+      ],
+      "id": "d57ab029-51e7-4cef-aae2-541924cf714f",
+      "name": "Armazena Cadastros das Escolas",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "roRhH41KaZAVkWaG",
+          "name": "Nicolas Drive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Processar resposta do servidor de escolas\nconst response = $input.first().json;\n\nif (!response.success) {\n  throw new Error(response.error || 'Erro ao converter arquivo');\n}\n\n// Retornar cada PDF como item separado\nreturn response.pdfs.map(pdf => ({\n  json: {\n    filename: pdf.filename,\n    nome_escola: pdf.nome_escola,\n    numero: pdf.numero,\n    tipo: \"escola\"\n  },\n  binary: {\n    data: {\n      data: pdf.content,\n      mimeType: 'application/pdf',\n      fileName: pdf.filename\n    }\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        -1320
+      ],
+      "id": "590d803e-401b-4084-8e76-82345367c8f9",
+      "name": "Aux 2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Processar resposta do servidor\nconst response = $input.first().json;\n\nif (!response.success) {\n  throw new Error(response.error || 'Erro ao converter arquivo');\n}\n\n// IMPORTANTE: Retornar CADA PDF como um item separado\nreturn response.pdfs.map(pdf => ({\n  json: {\n    filename: pdf.filename,\n    nome_aluno: pdf.nome_aluno,\n    numero: pdf.numero\n  },\n  binary: {\n    data: {\n      data: pdf.content,\n      mimeType: 'application/pdf',\n      fileName: pdf.filename\n    }\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        -1560
+      ],
+      "id": "e3cc9072-a507-4fe3-9da9-e441ef05be2a",
+      "name": "Aux 1"
+    },
+    {
+      "parameters": {
+        "content": "## Inserção de documentos na Base de Dados Vetorial (Supabase)",
+        "height": 560,
+        "width": 1360,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -580,
+        -1000
+      ],
+      "id": "bd132089-b38b-41cf-bb37-f29cad6fbfa9",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json.text }}",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "file_id",
+                "value": "={{ $('Edit Fields1').item.json.file_id }}"
+              }
+            ]
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1,
+      "position": [
+        480,
+        -760
+      ],
+      "id": "d1910381-5df1-47aa-b924-1c679b2ea0b6",
+      "name": "Default Data Loader"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": {
+          "__rl": true,
+          "value": "documents",
+          "mode": "list",
+          "cachedResultName": "documents"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1.1,
+      "position": [
+        400,
+        -920
+      ],
+      "id": "9dae62aa-2913-4293-91af-faeb597459c3",
+      "name": "Supabase Vector Store",
+      "credentials": {
+        "supabaseApi": {
+          "id": "SFaJOdGCEk4KTrC2",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/text-embedding-004"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        340,
+        -640
+      ],
+      "id": "fae1d656-1166-4f6a-b81f-fd4522cf37f3",
+      "name": "Embeddings Google Gemini",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "lO5Yu23URNB8fyb8",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        560,
+        -640
+      ],
+      "id": "36cc823d-f483-49bc-a8ef-acaf6a987f68",
+      "name": "Recursive Character Text Splitter"
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "value": "https://drive.google.com/drive/u/0/folders/1jG1jrgkg8tWJqMNzq9fVWxqY3yrDABWx",
+          "mode": "url"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        -900
+      ],
+      "id": "0a5bcd50-7e2b-4bba-ad23-5edb42abc4f5",
+      "name": "Arquivos Criados?",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "roRhH41KaZAVkWaG",
+          "name": "Nicolas Drive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "value": "https://drive.google.com/drive/u/0/folders/1jG1jrgkg8tWJqMNzq9fVWxqY3yrDABWx",
+          "mode": "url"
+        },
+        "event": "fileUpdated",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        -620
+      ],
+      "id": "7ec431d6-a1f6-4a89-9e62-da8ce7f20394",
+      "name": "Arquivos Atualizados?",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "roRhH41KaZAVkWaG",
+          "name": "Nicolas Drive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Arquitetura do Agente RAG",
+        "height": 480,
+        "width": 880,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -580,
+        -340
+      ],
+      "id": "101928a7-d2e9-4eed-bf58-47b59d40433b",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## LLMs",
+        "height": 260,
+        "width": 560,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -580,
+        240
+      ],
+      "id": "d2252c2d-8bdf-422d-b65e-d0692c831744",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -360,
+        340
+      ],
+      "id": "a92adc1e-33bc-4eff-a708-8c03880df452",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "TSaBbNVqpmb9p5N1",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolName": "dados_estudo_de_caso",
+        "toolDescription": "Essa base de dados contém documentos chamados de Estudo de Caso e Cadastro da Escola, eles contém informações sobre estudantes com TEA e as escolas onde estudam. O usuário irá forncer nome da criança e a escola, ache os documentos correspondentes.",
+        "tableName": {
+          "__rl": true,
+          "value": "documents",
+          "mode": "list",
+          "cachedResultName": "documents"
+        },
+        "topK": 42,
+        "options": {
+          "queryName": "match_documents"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1.1,
+      "position": [
+        -20,
+        -120
+      ],
+      "id": "0eeba24e-fb92-4c8d-badf-a3445c9dbcb1",
+      "name": "Supabase Vector Store 1",
+      "credentials": {
+        "supabaseApi": {
+          "id": "SFaJOdGCEk4KTrC2",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/text-embedding-004"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -20
+      ],
+      "id": "11acf06e-3309-4903-9af6-4f37a355b6ef",
+      "name": "Embeddings Google Gemini 1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "lO5Yu23URNB8fyb8",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "deepseek-reasoner",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        340
+      ],
+      "id": "e3998137-08e8-4103-88bd-900e8228fc6f",
+      "name": "DeepSeek Chat Model",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "AFbzyZWaOacdE14d",
+          "name": "DeepSeek Autism.IA"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-pro",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -180,
+        340
+      ],
+      "id": "bbc4a7c3-6559-41b1-a812-5ee6df895fc3",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "lO5Yu23URNB8fyb8",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "RAG Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Extract from File1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Estudo de Caso (respostas)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cadastro da Escola (respostas)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Estudo de Caso (respostas)": {
+      "main": [
+        [
+          {
+            "node": "XLXS2PDF - Estudo de Caso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XLXS2PDF - Estudo de Caso": {
+      "main": [
+        [
+          {
+            "node": "Aux 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cadastro da Escola (respostas)": {
+      "main": [
+        [
+          {
+            "node": "XLXS2PDF - Cadastro da Escola",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File1": {
+      "main": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Google Drive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Supabase2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory1": {
+      "ai_memory": [
+        [
+          {
+            "node": "RAG Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XLXS2PDF - Cadastro da Escola": {
+      "main": [
+        [
+          {
+            "node": "Aux 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armazena Estudos de Caso": {
+      "main": [
+        []
+      ]
+    },
+    "Aux 2": {
+      "main": [
+        [
+          {
+            "node": "Armazena Cadastros das Escolas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aux 1": {
+      "main": [
+        [
+          {
+            "node": "Armazena Estudos de Caso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recursive Character Text Splitter": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Arquivos Criados?": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Arquivos Atualizados?": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Supabase Vector Store 1": {
+      "ai_tool": [
+        [
+          {
+            "node": "RAG Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini 1": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Supabase Vector Store 1",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "RAG Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "RAG Agent": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "205bff3f-0a4b-4348-80af-d9937ba7106b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "419f47d4f8c1c6bf0a81fead126defca507a91a5f5d45f198f8246e44cdc32cc"
+  },
+  "id": "B93h0zv21vPdjmmG",
+  "tags": []
+}

@@ -1,0 +1,161 @@
+ANÁLISE DE DIVERGÊNCIAS - DIAS 1, 2 e 3
+Data: 2026-03-23
+
+Referências:
+- Esperado: especificação manual enviada pelo usuário
+- Capturado: debug_primeiros_3_dias.txt
+
+Contexto do teste executado:
+- Fonte escolhida: native_pdf_text
+- OCR utilizado: false
+- Impacto direto: baixa recuperação de marcações em checkboxes e observações longas.
+
+====================================================
+DIA 1 (esperado: 10/02/2025)
+====================================================
+
+1) Campos de identificação
+- Aluno
+  Esperado: Alvina Almeida Bastos Bisneta
+  Capturado: Alvina Almeida Bas tos Bisne ta
+  Divergência: parcial (quebra de tokens)
+  Causa provável: texto extraído com fragmentação por espaçamento/kerning no PDF.
+
+- Professor(a)
+  Esperado: Estéfany Guimarães dos Reis
+  Capturado: "Est�fany Guimar �es dos R eis ..." + texto de observações misturado
+  Divergência: alta
+  Causa provável: regex de professor sem delimitador forte; parser "vaza" para bloco de observações.
+
+2) Data / dia letivo
+- Data
+  Esperado: 10 2 2025
+  Capturado: 2025-02-10
+  Divergência: não (normalização correta)
+
+3) Perguntas (7 respostas)
+- lanchou
+  Esperado: Sim
+  Capturado: Não
+  Divergência: crítica (inversão)
+  Causa provável: leitura ambígua da tabela SIM/NÃO/PARCIALMENTE por proximidade textual.
+
+- participou_brincadeira
+  Esperado: Parcialmente
+  Capturado: não capturado
+  Divergência: crítica
+  Causa provável: parser atual busca token de resposta no texto linear, mas a resposta está em checkbox.
+
+- atencao_professora
+  Esperado: Sim
+  Capturado: não capturado
+  Divergência: crítica
+  Causa provável: mesma limitação de checkbox/tabular.
+
+- interesse_atividades
+  Esperado: Sim
+  Capturado: não capturado
+  Divergência: crítica
+
+- realizou_atividades
+  Esperado: Sim
+  Capturado: não capturado
+  Divergência: crítica
+
+- uso_banheiro
+  Esperado: Sim
+  Capturado: não capturado
+  Divergência: crítica
+
+- cumpriu_combinados
+  Esperado: Sim
+  Capturado: não capturado
+  Divergência: crítica
+
+4) Observações
+- Esperado: texto longo (parágrafo completo)
+- Capturado: vazio
+- Divergência: crítica
+- Causa provável: bloco de observações está em área com layout mais imagético/baixa extração nativa.
+
+
+====================================================
+DIA 2 (esperado: 11/02/2025)
+====================================================
+
+1) Identificação
+- Aluno: parcial (mesma fragmentação do Dia 1)
+- Professor(a): alta divergência (texto contaminado por outros blocos)
+
+2) Data
+- Esperado: 11 2 2025
+- Capturado: 2025-02-11
+- Divergência: não (normalização correta)
+
+3) Perguntas (7)
+- Esperado: todas Sim
+- Capturado: todas não capturadas
+- Divergência: crítica geral
+- Causa provável: ausência de leitura robusta de marcação em tabela checkbox.
+
+4) Observações
+- Esperado: texto longo sobre lanche/recreio/pátio
+- Capturado: vazio
+- Divergência: crítica
+
+
+====================================================
+DIA 3 (esperado: 12/02/2025)
+====================================================
+
+1) Identificação
+- Aluno: parcial (fragmentado)
+- Professor(a): alta divergência (mistura com cabeçalhos/perguntas)
+
+2) Data
+- Esperado: 12 2 2025
+- Capturado: 2025-02-12
+- Divergência: não
+
+3) Perguntas (7)
+- Esperado:
+  - lanchou: Sim
+  - participou_brincadeira: Parcialmente
+  - demais: Sim
+- Capturado: todas não capturadas
+- Divergência: crítica geral
+
+4) Observações
+- Esperado: texto longo sobre educação física, recreio e saída
+- Capturado: vazio
+- Divergência: crítica
+
+
+====================================================
+RESUMO EXECUTIVO DAS DIVERGÊNCIAS
+====================================================
+
+Acertos:
+- Segmentação temporal dos 3 dias (datas corretas)
+
+Erros principais:
+- Professor(a) com contaminação de texto adjacente
+- 20 de 21 respostas de atividade não capturadas
+- 1 resposta capturada com valor invertido (Dia 1, lanchou)
+- Observações abertas dos 3 dias não capturadas
+
+Causa raiz predominante:
+- Estratégia atual baseada em texto linear (native_pdf_text) não resolve bem tabela de checkboxes.
+- Falta de OCR aplicado na execução de referência deste debug.
+
+
+====================================================
+PRIORIDADES DE CALIBRAÇÃO (ordem sugerida)
+====================================================
+
+P1) Forçar OCR para este template e avaliar novamente os 3 dias.
+P2) Trocar regra de respostas para leitura posicional da linha da pergunta x colunas (SIM/NÃO/PARCIALMENTE).
+P3) Delimitar extração de professor(a) por âncoras rígidas entre rótulos (ALUNO, PROFESSOR(A), DIA LETIVO, DATA).
+P4) Delimitar observações entre o bloco de instrução e o próximo cabeçalho de diário.
+
+Fim.

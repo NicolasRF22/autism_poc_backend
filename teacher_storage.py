@@ -2,8 +2,9 @@
 import os
 import json
 import uuid
-from datetime import datetime
 from typing import List, Dict, Optional
+
+from time_utils import now_brasilia_iso
 
 
 class TeacherStorage:
@@ -28,8 +29,8 @@ class TeacherStorage:
         teacher = {
             "id": teacher_id,
             **teacher_data,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": now_brasilia_iso(),
+            "updated_at": now_brasilia_iso(),
         }
         self._index.append(teacher)
         self._save_index()
@@ -45,7 +46,7 @@ class TeacherStorage:
         teacher["id"] = teacher_id
         teacher["created_at"] = created_at
         teacher.update(teacher_data)
-        teacher["updated_at"] = datetime.now().isoformat()
+        teacher["updated_at"] = now_brasilia_iso()
 
         self._save_index()
         return teacher

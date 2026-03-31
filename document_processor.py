@@ -4,7 +4,7 @@ import PyPDF2
 from google import genai
 from google.genai import types
 from typing import List
-from usage_tracker import extract_input_tokens, record_model_usage
+from usage_tracker import extract_usage_metrics, record_model_usage
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -68,6 +68,7 @@ def generate_embeddings(
     text: str,
     api_key: str,
     task_type: str = "RETRIEVAL_DOCUMENT",
+    operation: str = "embedding",
 ) -> List[float]:
     """Gera embeddings usando Google Gemini (padrão: gemini-embedding-001).
 
@@ -83,6 +84,13 @@ def generate_embeddings(
         contents=text,
         config=types.EmbedContentConfig(task_type=task_type),
     )
-    input_tokens = extract_input_tokens(result, fallback_text=text)
-    record_model_usage(embedding_model, input_tokens=input_tokens)
+    usage = extract_usage_metrics(result, fallback_text=text)
+    operation_label = f"{operation}:{task_type.lower()}"
+    record_model_usage(
+        embedding_model,
+        input_tokens=usage['input_tokens'],
+        output_tokens=usage['output_tokens'],
+        total_tokens=usage['total_tokens'],
+        operation=operation_label,
+    )
     return result.embeddings[0].values

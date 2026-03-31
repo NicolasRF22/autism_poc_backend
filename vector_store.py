@@ -3,7 +3,7 @@ import os
 import json
 from typing import List, Dict, Optional
 import uuid
-from datetime import datetime
+from time_utils import now_brasilia_iso
 
 
 class VectorStore:
@@ -69,7 +69,7 @@ class VectorStore:
                 **metadata,
                 "doc_id": doc_id,
                 "chunk_index": i,
-                "upload_date": datetime.now().isoformat(),
+                "upload_date": now_brasilia_iso(),
             }
             for i in range(len(chunks))
         ]
@@ -124,6 +124,29 @@ class VectorStore:
                     "upload_date": metadata.get("upload_date", ""),
                 }
         return list(unique_docs.values())
+
+    def get_document(self, doc_id: str) -> Optional[Dict]:
+        """Retorna metadados do documento por doc_id."""
+        if not doc_id or self.collection.count() == 0:
+            return None
+
+        try:
+            results = self.collection.get(where={"doc_id": doc_id}, include=["metadatas"])
+        except Exception:
+            return None
+
+        metadatas = results.get("metadatas") or []
+        if not metadatas:
+            return None
+
+        metadata = metadatas[0] or {}
+        return {
+            "doc_id": doc_id,
+            "file_name": metadata.get("file_name", "Desconhecido"),
+            "student_name": metadata.get("student_name", ""),
+            "school": metadata.get("school", ""),
+            "upload_date": metadata.get("upload_date", ""),
+        }
 
     def list_students(self) -> List[Dict]:
         """Lista estudantes únicos agrupados por (student_name, school)."""
@@ -265,3 +288,47 @@ class VectorStore:
     def count(self) -> int:
         """Retorna número total de chunks indexados."""
         return self.collection.count()
+
+    def summarize_student_documents(self, student_name: str, school: str) -> Dict:
+        """Resume documentos indexados de um aluno/escola específicos."""
+        if not student_name or not school or self.collection.count() == 0:
+            return {
+                "document_count": 0,
+                "documents": [],
+            }
+
+        where_filter = {
+            "$and": [
+                {"student_name": {"$eq": student_name}},
+                {"school": {"$eq": school}},
+            ]
+        }
+
+        try:
+            results = self.collection.get(where=where_filter, include=["metadatas"])
+        except Exception:
+            return {
+                "document_count": 0,
+                "documents": [],
+            }
+
+        unique_docs: Dict[str, Dict] = {}
+        for metadata in results.get("metadatas", []):
+            doc_id = metadata.get("doc_id")
+            if doc_id and doc_id not in unique_docs:
+                unique_docs[doc_id] = {
+                    "doc_id": doc_id,
+                    "file_name": metadata.get("file_name", ""),
+                    "upload_date": metadata.get("upload_date", ""),
+                }
+
+        documents = sorted(
+            list(unique_docs.values()),
+            key=lambda item: item.get("upload_date", ""),
+            reverse=True,
+        )
+
+        return {
+            "document_count": len(documents),
+            "documents": documents,
+        }

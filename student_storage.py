@@ -3,8 +3,9 @@ import os
 import json
 import uuid
 import unicodedata
-from datetime import datetime
 from typing import List, Dict, Optional
+
+from time_utils import now_brasilia_iso
 
 
 class StudentStorage:
@@ -36,8 +37,8 @@ class StudentStorage:
         student = {
             "id": student_id,
             **student_data,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": now_brasilia_iso(),
+            "updated_at": now_brasilia_iso(),
         }
         self._index.append(student)
         self._save_index()
@@ -51,7 +52,7 @@ class StudentStorage:
 
         # Atualiza de forma não-destrutiva para preservar campos do cadastro completo
         student.update(student_data)
-        student["updated_at"] = datetime.now().isoformat()
+        student["updated_at"] = now_brasilia_iso()
         
         self._save_index()
         return student

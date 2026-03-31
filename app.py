@@ -1,5 +1,8 @@
 import os
 import copy
+import unicodedata
+import difflib
+import time
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
@@ -27,6 +30,17 @@ def _parse_cors_origins() -> list:
         return ['*']
     return [origin.strip() for origin in raw.split(',') if origin.strip()]
 
+
+def _normalize_student_name(value: str) -> str:
+    normalized = unicodedata.normalize('NFKD', (value or '').strip().lower())
+    normalized = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+    return ' '.join(normalized.split())
+
+
+def _name_tokens(value: str) -> List[str]:
+    normalized = _normalize_student_name(value)
+    return [token for token in normalized.split(' ') if token]
+
 app = Flask(__name__)
 DEBUG_MODE = _to_bool(os.getenv('DEBUG', 'False'), default=False)
 CORS(app, resources={r'/api/*': {'origins': _parse_cors_origins()}})
@@ -35,10 +49,12 @@ CORS(app, resources={r'/api/*': {'origins': _parse_cors_origins()}})
 # RAG Engine (inicializado sob demanda para evitar falha sem API key)
 # ------------------------------------------------------------------
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
+RAG_DOCUMENTS_FOLDER = os.path.join(os.path.dirname(__file__), 'rag_documents')
 PEIS_FOLDER = os.path.join(os.path.dirname(__file__), 'peis')
 DIARIES_FOLDER = os.path.join(os.path.dirname(__file__), 'diaries')
 PDIS_FOLDER = os.path.join(os.path.dirname(__file__), 'pdis')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(RAG_DOCUMENTS_FOLDER, exist_ok=True)
 os.makedirs(PEIS_FOLDER, exist_ok=True)
 os.makedirs(DIARIES_FOLDER, exist_ok=True)
 os.makedirs(PDIS_FOLDER, exist_ok=True)
@@ -46,16 +62,21 @@ os.makedirs(PDIS_FOLDER, exist_ok=True)
 from pei_storage import PEIStorage
 from diary_storage import DiaryStorage
 from pdi_storage import PDIStorage
+from prompt_storage import PromptStorage
 from school_storage import SchoolStorage
 from student_storage import StudentStorage
 from teacher_storage import TeacherStorage
 from auth_storage import AuthStorage, VALID_ROLES
 from audit_storage import AuditStorage
 from diary_pdf_parser import parse_diary_pdf, QUESTION_PATTERNS
-from usage_tracker import get_usage_snapshot
+from usage_tracker import get_usage_snapshot, record_model_usage
+from time_utils import now_brasilia_filename, now_brasilia_iso
 _pei_storage = PEIStorage(storage_dir=PEIS_FOLDER)
 _diary_storage = DiaryStorage(storage_dir=DIARIES_FOLDER)
 _pdi_storage = PDIStorage(storage_dir=PDIS_FOLDER)
+PROMPTS_FOLDER = os.path.join(os.path.dirname(__file__), 'prompts')
+os.makedirs(PROMPTS_FOLDER, exist_ok=True)
+_prompt_storage = PromptStorage(storage_dir=PROMPTS_FOLDER)
 
 SCHOOLS_FOLDER = os.path.join(os.path.dirname(__file__), 'schools')
 STUDENTS_FOLDER = os.path.join(os.path.dirname(__file__), 'students')
@@ -76,6 +97,73 @@ _auth_storage = AuthStorage(
     default_admin_password=os.getenv('AUTH_ADMIN_PASSWORD', ''),
 )
 _audit_storage = AuditStorage(storage_dir=AUDIT_FOLDER)
+
+
+def _sync_legacy_diary_links() -> int:
+    linked_count = 0
+    students = _student_storage.list_all_students()
+    student_index = []
+
+    for student in students:
+        student_name = student.get('name') or ''
+        student_index.append({
+            'id': student.get('id'),
+            'name': student_name,
+            'normalized_name': _normalize_student_name(student_name),
+            'tokens': _name_tokens(student_name),
+        })
+
+    # 1) Linkagem exata por nome normalizado
+    for student in students:
+        linked_count += _diary_storage.link_entries_to_student(
+            student.get('id'),
+            student.get('name'),
+        )
+
+    # 2) Fallback conservador para nomes muito próximos (ex.: Mariane/Mariana)
+    summaries = _diary_storage.list_all_summaries()
+    for summary in summaries:
+        if summary.get('student_id'):
+            continue
+
+        diary_name = summary.get('student_name') or ''
+        diary_normalized = _normalize_student_name(diary_name)
+        diary_tokens = _name_tokens(diary_name)
+        if len(diary_tokens) < 2:
+            continue
+
+        best_match = None
+        best_ratio = 0.0
+        for student in student_index:
+            student_tokens = student.get('tokens') or []
+            if len(student_tokens) < 2:
+                continue
+            if diary_tokens[-1] != student_tokens[-1]:
+                continue
+
+            ratio = difflib.SequenceMatcher(None, diary_normalized, student.get('normalized_name', '')).ratio()
+            if ratio >= 0.92 and ratio > best_ratio:
+                best_ratio = ratio
+                best_match = student
+
+        if best_match:
+            linked_count += _diary_storage.link_entries_to_student(
+                best_match.get('id'),
+                best_match.get('name'),
+            )
+
+    return linked_count
+
+
+def _sync_legacy_pdi_links() -> int:
+    linked_count = 0
+    students = _student_storage.list_all_students()
+    for student in students:
+        linked_count += _pdi_storage.link_pdis_to_student(
+            student.get('id'),
+            student.get('name'),
+        )
+    return linked_count
 
 JWT_SECRET = os.getenv('AUTH_JWT_SECRET') or os.getenv('SECRET_KEY')
 if not JWT_SECRET:
@@ -111,6 +199,128 @@ def get_rag_engine():
         from rag_engine import RAGEngine
         _rag_engine = RAGEngine(api_key=api_key)
     return _rag_engine
+
+
+def _student_name_from_record(student: Dict) -> str:
+    return student.get('name') or student.get('studentName') or ''
+
+
+def _student_school_from_record(student: Dict) -> str:
+    school_id = (student.get('school_id') or '').strip()
+    if school_id:
+        school = _school_storage.get_school(school_id)
+        if school:
+            return (school.get('name') or '').strip()
+    return (student.get('school_name') or student.get('schoolName') or '').strip()
+
+
+def _build_integrated_student_context(student_name: str, student_id: str = '', max_diary_entries: int = 8) -> str:
+    sections: List[str] = []
+
+    # Cadastro do aluno
+    student_record = _student_storage.get_student(student_id) if student_id else None
+    if not student_record and student_name:
+        matches = _student_storage.find_students_by_name(student_name)
+        student_record = matches[0] if matches else None
+
+    canonical_student_name = student_name
+    if student_record:
+        canonical_student_name = _student_name_from_record(student_record) or student_name
+        sections.append(
+            'Cadastro do aluno (JSON):\n'
+            + json.dumps(student_record, ensure_ascii=False, indent=2)
+        )
+
+    # Diário de acompanhamento
+    diary_entries = _diary_storage.get_entries_by_student(
+        canonical_student_name,
+        student_id=student_id or None,
+    )
+    diary_entries_count = len(diary_entries)
+    if diary_entries:
+        recent_entries = diary_entries[:max_diary_entries]
+        sections.append(
+            'Diário de acompanhamento (JSON, entradas mais recentes):\n'
+            + json.dumps(recent_entries, ensure_ascii=False, indent=2)
+        )
+
+    # PDI
+    pdi = _pdi_storage.get_pdi_by_student(
+        canonical_student_name,
+        student_id=student_id or None,
+    )
+    if pdi:
+        sections.append(
+            'PDI do aluno (JSON):\n'
+            + json.dumps(pdi, ensure_ascii=False, indent=2)
+        )
+
+    source_status = (
+        'Status oficial das fontes (use estas flags para responder perguntas de existência de dados):\n'
+        f'- diario_entries_count: {diary_entries_count}\n'
+        f'- diario_included: {str(diary_entries_count > 0).lower()}\n'
+        f'- pdi_included: {str(bool(pdi)).lower()}\n'
+        f'- student_profile_included: {str(bool(student_record)).lower()}\n'
+        'Regra: não classifique PDI como Diário. Se diario_entries_count = 0, responda que não há diário cadastrado.'
+    )
+    sections.insert(0, source_status)
+
+    if not sections:
+        return '(Sem dados integrados de cadastro/diário/PDI para este aluno)'
+
+    return '\n\n---\n\n'.join(sections)
+
+
+@app.route('/api/rag/pei-sources-preview', methods=['GET'])
+def get_pei_sources_preview():
+    """Retorna prévia das fontes que serão usadas para gerar PEI."""
+    student_id = request.args.get('student_id', '').strip()
+    student_name = request.args.get('student_name', '').strip()
+    school = request.args.get('school', '').strip()
+
+    if student_id:
+        student = _student_storage.get_student(student_id)
+        if not student:
+            return jsonify({"error": "Aluno não encontrado"}), 404
+        student_name = _student_name_from_record(student)
+        school = _student_school_from_record(student)
+
+    if not student_name:
+        return jsonify({"error": "Nome do estudante é obrigatório"}), 400
+
+    diary_entries = _diary_storage.get_entries_by_student(student_name, student_id=student_id or None)
+    pdi = _pdi_storage.get_pdi_by_student(student_name, student_id=student_id or None)
+
+    docs_summary = {
+        "document_count": 0,
+        "documents": [],
+    }
+    engine = get_rag_engine()
+    if engine is not None and school:
+        docs_summary = engine.vector_store.summarize_student_documents(student_name, school)
+
+    return jsonify({
+        "student_name": student_name,
+        "school": school,
+        "sources": {
+            "student_profile": {
+                "included": True,
+            },
+            "vector_documents": {
+                "included": docs_summary['document_count'] > 0,
+                "document_count": docs_summary['document_count'],
+                "documents": docs_summary['documents'],
+            },
+            "diary": {
+                "included": len(diary_entries) > 0,
+                "entries_count": len(diary_entries),
+            },
+            "pdi": {
+                "included": bool(pdi),
+                "updated_at": pdi.get('updated_at') if pdi else None,
+            },
+        },
+    })
 
 
 def _extract_bearer_token() -> str:
@@ -215,7 +425,6 @@ def audit_api_requests(response):
 # Armazenamento em memória (pode ser substituído por banco de dados)
 submissions = []
 
-# Definição dos formulários disponíveis
 FORMS = {
     "cadastro_escola": {
         "id": "cadastro_escola",
@@ -265,7 +474,7 @@ def submit_form():
         "form_id": data['form_id'],
         "form_name": FORMS.get(data['form_id'], {}).get('name', 'Desconhecido'),
         "answers": data['answers'],
-        "submitted_at": datetime.now().isoformat(),
+        "submitted_at": now_brasilia_iso(),
         "metadata": data.get('metadata', {})
     }
     
@@ -311,7 +520,7 @@ def download_all_submissions():
     if not submissions:
         return jsonify({"error": "Nenhuma submissão encontrada"}), 404
     
-    filename = f"all_submissions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    filename = f"all_submissions_{now_brasilia_filename()}.json"
     filepath = f"/tmp/{filename}"
     
     with open(filepath, 'wb') as f:
@@ -451,11 +660,24 @@ def get_audit_events():
 @app.route('/api/admin/model-usage', methods=['GET'])
 def get_model_usage():
     """Retorna uso atual e limites configurados por modelo (admin)."""
+    include_history = request.args.get('include_history', '0').strip().lower() in {'1', 'true', 'yes'}
+    history_limit_raw = request.args.get('history_limit', '').strip()
+    history_limit = None
+    if history_limit_raw:
+        try:
+            history_limit = int(history_limit_raw)
+        except ValueError:
+            return jsonify({'error': 'Parâmetro history_limit inválido'}), 400
+
     additional_models = [
         os.getenv('GOOGLE_GENERATION_MODEL', 'gemini-2.5-flash'),
         os.getenv('GOOGLE_EMBEDDING_MODEL', 'gemini-embedding-001'),
     ]
-    payload = get_usage_snapshot(additional_models=additional_models)
+    payload = get_usage_snapshot(
+        additional_models=additional_models,
+        include_history=include_history,
+        history_limit=history_limit,
+    )
     return jsonify(payload)
 
 
@@ -467,8 +689,46 @@ def get_model_usage():
 def get_diary_students():
     """Lista todos os alunos com diários (com resumos)"""
     try:
+        _sync_legacy_diary_links()
         summaries = _diary_storage.list_all_summaries()
         return jsonify(summaries)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/diary/available-students', methods=['GET'])
+def get_available_diary_students():
+    """Lista alunos cadastrados que ainda não possuem diário."""
+    try:
+        _sync_legacy_diary_links()
+        students = _student_storage.list_all_students()
+        diary_summaries = _diary_storage.list_all_summaries()
+
+        used_student_ids = {
+            (summary.get('student_id') or '').strip()
+            for summary in diary_summaries
+            if (summary.get('student_id') or '').strip()
+        }
+        used_student_names = {
+            _normalize_student_name(summary.get('student_name') or '')
+            for summary in diary_summaries
+            if summary.get('student_name')
+        }
+
+        available_students = []
+        for student in students:
+            student_id = (student.get('id') or '').strip()
+            student_name = student.get('name') or ''
+            normalized_name = _normalize_student_name(student_name)
+
+            if student_id and student_id in used_student_ids:
+                continue
+            if normalized_name in used_student_names:
+                continue
+
+            available_students.append(student)
+
+        return jsonify(available_students)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -479,6 +739,24 @@ def get_student_entries(student_name):
     try:
         entries = _diary_storage.get_entries_by_student(student_name)
         return jsonify(entries)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/diary/students/<student_name>', methods=['DELETE'])
+def delete_student_diary(student_name):
+    """Remove todas as entradas de diário de um aluno."""
+    try:
+        student_id = (request.args.get('student_id') or '').strip() or None
+        removed_count = _diary_storage.delete_entries_by_student(student_name, student_id=student_id)
+
+        if removed_count == 0:
+            return jsonify({"error": "Diário não encontrado para este aluno"}), 404
+
+        return jsonify({
+            "message": "Diário removido com sucesso",
+            "removed_entries": removed_count,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -497,7 +775,20 @@ def create_diary_entry():
             return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
     
     try:
-        student_id = (data.get('student_id') or '').strip() or None
+        student_id = (data.get('student_id') or '').strip()
+        if not student_id:
+            return jsonify({"error": "student_id é obrigatório para criar diário"}), 400
+
+        student = _student_storage.get_student(student_id)
+        if not student:
+            return jsonify({"error": "Aluno selecionado não foi encontrado"}), 400
+
+        student_name = student.get('name') or student.get('studentName') or data.get('student_name') or ''
+        if not student_name:
+            return jsonify({"error": "Aluno selecionado não possui nome válido"}), 400
+
+        _diary_storage.link_entries_to_student(student_id, student_name)
+
         status = (data.get('status') or 'final').strip().lower()
         source = (data.get('source') or 'manual').strip().lower()
         parse_warnings = data.get('parse_warnings') or []
@@ -509,11 +800,11 @@ def create_diary_entry():
             return jsonify({"error": "parse_warnings deve ser uma lista"}), 400
 
         warnings = copy.deepcopy(parse_warnings)
-        if _diary_storage.has_date_conflict(student_id, data['student_name'], data['diary_date']):
+        if _diary_storage.has_date_conflict(student_id, student_name, data['diary_date']):
             warnings.append('Já existe registro para o mesmo aluno e data')
 
         entry = _diary_storage.save_entry(
-            student_name=data['student_name'],
+            student_name=student_name,
             teachers=data['teachers'],
             diary_date=data['diary_date'],
             answers=data['answers'],
@@ -543,6 +834,74 @@ def get_diary_entry(entry_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/diary/entries/<entry_id>', methods=['PUT'])
+def update_diary_entry(entry_id):
+    """Atualiza uma entrada existente de diário"""
+    data = request.json or {}
+    if not data:
+        return jsonify({"error": "Dados inválidos"}), 400
+
+    try:
+        existing_entry = _diary_storage.get_entry(entry_id)
+        if not existing_entry:
+            return jsonify({"error": "Entrada não encontrada"}), 404
+
+        student_id = (data.get('student_id') or existing_entry.get('student_id') or '').strip() or None
+        if student_id:
+            student = _student_storage.get_student(student_id)
+            if not student:
+                return jsonify({"error": "Aluno selecionado não foi encontrado"}), 400
+            student_name = student.get('name') or student.get('studentName') or existing_entry.get('student_name') or ''
+        else:
+            student_name = data.get('student_name') or existing_entry.get('student_name') or ''
+
+        teachers = data.get('teachers', existing_entry.get('teachers', []))
+        if not isinstance(teachers, list) or len(teachers) == 0:
+            return jsonify({"error": "Pelo menos um professor é obrigatório"}), 400
+
+        diary_date = (data.get('diary_date') or existing_entry.get('diary_date') or '').strip()
+        if not diary_date:
+            return jsonify({"error": "Data do registro é obrigatória"}), 400
+
+        answers = data.get('answers', existing_entry.get('answers', {}))
+        if not isinstance(answers, dict) or not answers:
+            return jsonify({"error": "Respostas do diário são obrigatórias"}), 400
+
+        open_obs = data.get('open_obs', existing_entry.get('open_obs', ''))
+        status = (data.get('status') or existing_entry.get('status') or 'final').strip().lower()
+        source = (data.get('source') or existing_entry.get('source') or 'manual').strip().lower()
+        parse_warnings = data.get('parse_warnings', existing_entry.get('parse_warnings', []))
+        if not isinstance(parse_warnings, list):
+            return jsonify({"error": "parse_warnings deve ser uma lista"}), 400
+
+        same_student_entries = _diary_storage.get_entries_by_student(student_name, student_id=student_id)
+        for entry in same_student_entries:
+            if entry.get('id') == entry_id:
+                continue
+            if (entry.get('diary_date') or '') == diary_date:
+                parse_warnings = [*parse_warnings, 'Já existe registro para o mesmo aluno e data']
+                break
+
+        updated_entry = _diary_storage.update_entry(
+            entry_id=entry_id,
+            student_name=student_name,
+            teachers=teachers,
+            diary_date=diary_date,
+            answers=answers,
+            open_obs=open_obs,
+            student_id=student_id,
+            status=status,
+            source=source,
+            parse_warnings=parse_warnings,
+        )
+        return jsonify({
+            "message": "Entrada atualizada com sucesso",
+            "entry": updated_entry,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/diary/entries/<entry_id>', methods=['DELETE'])
 def delete_diary_entry(entry_id):
     """Remove uma entrada de diário"""
@@ -558,7 +917,8 @@ def delete_diary_entry(entry_id):
 def get_last_teachers(student_name):
     """Retorna os professores da última entrada de um aluno (para usar como padrão)"""
     try:
-        teachers = _diary_storage.get_last_teachers(student_name)
+        student_id = (request.args.get('student_id') or '').strip() or None
+        teachers = _diary_storage.get_last_teachers(student_name, student_id=student_id)
         return jsonify({"teachers": teachers})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -761,8 +1121,46 @@ def commit_diary_import():
 def get_all_pdis():
     """Lista todos os PDIs com informações resumidas"""
     try:
+        _sync_legacy_pdi_links()
         pdis = _pdi_storage.list_all_pdis()
         return jsonify(pdis)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/pdi/available-students', methods=['GET'])
+def get_available_pdi_students():
+    """Lista alunos cadastrados que ainda não possuem PDI."""
+    try:
+        _sync_legacy_pdi_links()
+        students = _student_storage.list_all_students()
+        pdis = _pdi_storage.list_all_pdis()
+
+        used_student_ids = {
+            (pdi.get('student_id') or '').strip()
+            for pdi in pdis
+            if (pdi.get('student_id') or '').strip()
+        }
+        used_student_names = {
+            _normalize_student_name(pdi.get('student_name') or '')
+            for pdi in pdis
+            if pdi.get('student_name')
+        }
+
+        available_students = []
+        for student in students:
+            student_id = (student.get('id') or '').strip()
+            student_name = student.get('name') or ''
+            normalized_name = _normalize_student_name(student_name)
+
+            if student_id and student_id in used_student_ids:
+                continue
+            if normalized_name in used_student_names:
+                continue
+
+            available_students.append(student)
+
+        return jsonify(available_students)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -771,7 +1169,9 @@ def get_all_pdis():
 def get_pdi_by_student(student_name):
     """Retorna o PDI de um aluno específico"""
     try:
-        pdi = _pdi_storage.get_pdi_by_student(student_name)
+        _sync_legacy_pdi_links()
+        student_id = (request.args.get('student_id') or '').strip() or None
+        pdi = _pdi_storage.get_pdi_by_student(student_name, student_id=student_id)
         if not pdi:
             return jsonify({"error": "PDI não encontrado para este aluno"}), 404
         return jsonify(pdi)
@@ -783,6 +1183,7 @@ def get_pdi_by_student(student_name):
 def get_pdi_by_id(pdi_id):
     """Retorna um PDI específico por ID"""
     try:
+        _sync_legacy_pdi_links()
         pdi = _pdi_storage.get_pdi(pdi_id)
         if not pdi:
             return jsonify({"error": "PDI não encontrado"}), 404
@@ -799,7 +1200,7 @@ def create_pdi():
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
     
-    required_fields = ['student_name', 'birth_date', 'guardians', 'diagnosis', 'class', 'teachers', 'trimesters']
+    required_fields = ['student_id', 'student_name', 'birth_date', 'guardians', 'diagnosis', 'class', 'teachers', 'trimesters']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
@@ -812,14 +1213,32 @@ def create_pdi():
         return jsonify({"error": "Pelo menos um docente é obrigatório"}), 400
     
     try:
+        _sync_legacy_pdi_links()
+        student_id = (data.get('student_id') or '').strip()
+        if not student_id:
+            return jsonify({"error": "student_id é obrigatório para criar PDI"}), 400
+
+        student = _student_storage.get_student(student_id)
+        if not student:
+            return jsonify({"error": "Aluno selecionado não foi encontrado"}), 400
+
+        student_name = student.get('name') or student.get('studentName') or data.get('student_name') or ''
+        if not student_name:
+            return jsonify({"error": "Aluno selecionado não possui nome válido"}), 400
+
+        _pdi_storage.link_pdis_to_student(student_id, student_name)
+        if _pdi_storage.has_pdi_for_student(student_name=student_name, student_id=student_id):
+            return jsonify({"error": "Este aluno já possui um PDI cadastrado"}), 400
+
         pdi = _pdi_storage.save_pdi(
-            student_name=data['student_name'],
+            student_name=student_name,
             birth_date=data['birth_date'],
             guardians=data['guardians'],
             diagnosis=data['diagnosis'],
             class_name=data['class'],
             teachers=data['teachers'],
-            trimesters=data['trimesters']
+            trimesters=data['trimesters'],
+            student_id=student_id,
         )
         return jsonify({
             "message": "PDI criado com sucesso",
@@ -837,7 +1256,7 @@ def update_pdi(pdi_id):
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
     
-    required_fields = ['student_name', 'birth_date', 'guardians', 'diagnosis', 'class', 'teachers', 'trimesters']
+    required_fields = ['student_id', 'student_name', 'birth_date', 'guardians', 'diagnosis', 'class', 'teachers', 'trimesters']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
@@ -850,19 +1269,41 @@ def update_pdi(pdi_id):
         return jsonify({"error": "Pelo menos um docente é obrigatório"}), 400
     
     try:
+        _sync_legacy_pdi_links()
+        existing_pdi = _pdi_storage.get_pdi(pdi_id)
+        if not existing_pdi:
+            return jsonify({"error": "PDI não encontrado"}), 404
+
+        student_id = (data.get('student_id') or '').strip()
+        if not student_id:
+            return jsonify({"error": "student_id é obrigatório para atualizar PDI"}), 400
+
+        student = _student_storage.get_student(student_id)
+        if not student:
+            return jsonify({"error": "Aluno selecionado não foi encontrado"}), 400
+
+        student_name = student.get('name') or student.get('studentName') or data.get('student_name') or ''
+        if not student_name:
+            return jsonify({"error": "Aluno selecionado não possui nome válido"}), 400
+
+        if _pdi_storage.has_pdi_for_student(
+            student_name=student_name,
+            student_id=student_id,
+            exclude_pdi_id=pdi_id,
+        ):
+            return jsonify({"error": "Este aluno já possui um PDI cadastrado"}), 400
+
         pdi = _pdi_storage.update_pdi(
             pdi_id=pdi_id,
-            student_name=data['student_name'],
+            student_name=student_name,
             birth_date=data['birth_date'],
             guardians=data['guardians'],
             diagnosis=data['diagnosis'],
             class_name=data['class'],
             teachers=data['teachers'],
-            trimesters=data['trimesters']
+            trimesters=data['trimesters'],
+            student_id=student_id,
         )
-        
-        if not pdi:
-            return jsonify({"error": "PDI não encontrado"}), 404
         
         return jsonify({
             "message": "PDI atualizado com sucesso",
@@ -1154,10 +1595,19 @@ def upload_document():
 
         chunks = split_text_into_chunks(text)
         embeddings = [
-            generate_embeddings(chunk, os.getenv('GOOGLE_API_KEY'), task_type="RETRIEVAL_DOCUMENT")
+            generate_embeddings(
+                chunk,
+                os.getenv('GOOGLE_API_KEY'),
+                task_type="RETRIEVAL_DOCUMENT",
+                operation='rag_upload_document_embedding',
+            )
             for chunk in chunks
         ]
         doc_id = engine.vector_store.add_documents(chunks, embeddings, metadata)
+
+        stored_pdf_path = os.path.join(RAG_DOCUMENTS_FOLDER, f'{doc_id}.pdf')
+        os.replace(filepath, stored_pdf_path)
+        filepath = None
 
         return jsonify({
             "message": "Documento indexado com sucesso",
@@ -1168,7 +1618,7 @@ def upload_document():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
-        if os.path.exists(filepath):
+        if filepath and os.path.exists(filepath):
             os.remove(filepath)
 
 
@@ -1206,9 +1656,38 @@ def delete_rag_document(doc_id):
         return jsonify({"error": "GOOGLE_API_KEY não configurada no .env"}), 503
     try:
         engine.vector_store.delete_document(doc_id)
+
+        stored_pdf_path = os.path.join(RAG_DOCUMENTS_FOLDER, f'{doc_id}.pdf')
+        if os.path.exists(stored_pdf_path):
+            os.remove(stored_pdf_path)
+
         return jsonify({"message": "Documento removido com sucesso"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/documents/<doc_id>/download', methods=['GET'])
+def download_rag_document(doc_id):
+    """Baixa o PDF original de um documento indexado no RAG."""
+    engine = get_rag_engine()
+    if engine is None:
+        return jsonify({"error": "GOOGLE_API_KEY não configurada no .env"}), 503
+
+    doc = engine.vector_store.get_document(doc_id)
+    if not doc:
+        return jsonify({"error": "Documento não encontrado"}), 404
+
+    stored_pdf_path = os.path.join(RAG_DOCUMENTS_FOLDER, f'{doc_id}.pdf')
+    if not os.path.exists(stored_pdf_path):
+        return jsonify({"error": "Arquivo original não disponível para download"}), 404
+
+    download_name = doc.get('file_name') or f'{doc_id}.pdf'
+    return send_file(
+        stored_pdf_path,
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name=download_name,
+    )
 
 
 @app.route('/api/rag/reindex', methods=['POST'])
@@ -1242,7 +1721,12 @@ def reindex_documents():
         # Re-gerar embeddings com task_type correto
         new_embeddings = []
         for chunk in documents:
-            emb = generate_embeddings(chunk, google_api_key, task_type="RETRIEVAL_DOCUMENT")
+            emb = generate_embeddings(
+                chunk,
+                google_api_key,
+                task_type="RETRIEVAL_DOCUMENT",
+                operation='rag_reindex_document_embedding',
+            )
             new_embeddings.append(emb)
 
         # Atualizar embeddings no ChromaDB (upsert preserva textos e metadados)
@@ -1274,13 +1758,23 @@ def rag_chat():
         return jsonify({"error": "Mensagem não fornecida"}), 400
 
     try:
+        student_id = data.get('student_id', '').strip()
         student_name = data.get('student_name', '').strip()
         school = data.get('school', '').strip()
+        chat_prompt_data = _prompt_storage.get_chat_prompt()
         context_filter = None
         if student_name and school:
             context_filter = {"$and": [{"student_name": {"$eq": student_name}}, {"school": {"$eq": school}}]}
         elif student_name:
             context_filter = {"student_name": {"$eq": student_name}}
+
+        integrated_context = ''
+        if student_name:
+            integrated_context = _build_integrated_student_context(
+                student_name=student_name,
+                student_id=student_id,
+                max_diary_entries=3,
+            )
 
         session_id = data.get('session_id') or (f"{student_name}__{school}" if student_name else 'default')
 
@@ -1288,6 +1782,8 @@ def rag_chat():
             message=message,
             session_id=session_id,
             context_filter=context_filter,
+            integrated_context=integrated_context,
+            system_prompt_chat=chat_prompt_data['prompt'],
         )
         return jsonify(result)
     except Exception as e:
@@ -1301,7 +1797,10 @@ def generate_pei():
     if engine is None:
         return jsonify({"error": "GOOGLE_API_KEY não configurada no .env"}), 503
 
+    started_at = time.perf_counter()
+
     data = request.json or {}
+    student_id = data.get('student_id', '').strip()
     student_name = data.get('student_name', '').strip()
     school = data.get('school', '').strip()
 
@@ -1309,18 +1808,31 @@ def generate_pei():
         return jsonify({"error": "Nome do estudante e escola são obrigatórios"}), 400
 
     try:
+        pei_prompt_data = _prompt_storage.get_pei_prompt()
+        context_filter = {
+            "$and": [
+                {"student_name": {"$eq": student_name}},
+                {"school": {"$eq": school}},
+            ]
+        }
+        integrated_context = _build_integrated_student_context(
+            student_name=student_name,
+            student_id=student_id,
+        )
         result = engine.generate_pei(
             student_name=student_name,
             school=school,
             additional_info=data.get('additional_info', ''),
+            system_prompt_pei=pei_prompt_data['prompt'],
+            context_filter=context_filter,
+            integrated_context=integrated_context,
         )
         markdown_text = result['pei']
 
         # Gerar PDF
         from pdf_generator import markdown_to_pdf
-        from datetime import datetime
         safe_name = student_name.replace(' ', '_')
-        pdf_filename = f"PEI_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        pdf_filename = f"PEI_{safe_name}_{now_brasilia_filename()}.pdf"
         pdf_path = os.path.join(PEIS_FOLDER, pdf_filename)
         markdown_to_pdf(markdown_text, student_name, school, pdf_path)
 
@@ -1332,9 +1844,90 @@ def generate_pei():
             pdf_path=pdf_path,
         )
 
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        usage = result.get('usage') or {}
+        record_model_usage(
+            engine.generation_model,
+            input_tokens=usage.get('input_tokens', 0),
+            output_tokens=usage.get('output_tokens', 0),
+            total_tokens=usage.get('total_tokens'),
+            operation='pei_generation',
+            duration_ms=duration_ms,
+        )
+
         result['pei_id'] = entry['id']
         result['pdf_url'] = f"/api/rag/peis/{entry['id']}/pdf"
+        result['server_generation_time_ms'] = duration_ms
+        result['server_generation_time_seconds'] = round(duration_ms / 1000, 2)
         return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/pei-prompt', methods=['GET'])
+def get_pei_prompt():
+    """Retorna o prompt atual usado na geração de PEI."""
+    try:
+        return jsonify(_prompt_storage.get_pei_prompt())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/pei-prompt', methods=['PUT'])
+def update_pei_prompt():
+    """Atualiza o prompt de geração de PEI."""
+    data = request.json or {}
+    prompt = (data.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({"error": "Prompt é obrigatório"}), 400
+
+    try:
+        saved = _prompt_storage.save_pei_prompt(prompt)
+        return jsonify(saved)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/pei-prompt/reset', methods=['POST'])
+def reset_pei_prompt():
+    """Restaura o prompt atual para o prompt base salvo."""
+    try:
+        restored = _prompt_storage.reset_pei_prompt_to_base()
+        return jsonify(restored)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/chat-prompt', methods=['GET'])
+def get_chat_prompt():
+    """Retorna o prompt atual usado no chat RAG."""
+    try:
+        return jsonify(_prompt_storage.get_chat_prompt())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/chat-prompt', methods=['PUT'])
+def update_chat_prompt():
+    """Atualiza o prompt de chat RAG."""
+    data = request.json or {}
+    prompt = (data.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({"error": "Prompt é obrigatório"}), 400
+
+    try:
+        saved = _prompt_storage.save_chat_prompt(prompt)
+        return jsonify(saved)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/chat-prompt/reset', methods=['POST'])
+def reset_chat_prompt():
+    """Restaura o prompt atual do chat para o prompt base salvo."""
+    try:
+        restored = _prompt_storage.reset_chat_prompt_to_base()
+        return jsonify(restored)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
