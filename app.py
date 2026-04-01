@@ -1648,7 +1648,7 @@ def get_rag_documents():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/rag/documents/<doc_id>', methods=['DELETE'])
+@app.route('/api/rag/documents/<path:doc_id>', methods=['DELETE'])
 def delete_rag_document(doc_id):
     """Remove documento do vector store"""
     engine = get_rag_engine()
@@ -1666,7 +1666,7 @@ def delete_rag_document(doc_id):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/rag/documents/<doc_id>/download', methods=['GET'])
+@app.route('/api/rag/documents/<path:doc_id>/download', methods=['GET'])
 def download_rag_document(doc_id):
     """Baixa o PDF original de um documento indexado no RAG."""
     engine = get_rag_engine()
@@ -1769,11 +1769,11 @@ def rag_chat():
             context_filter = {"student_name": {"$eq": student_name}}
 
         integrated_context = ''
-        if student_name:
+        if student_name or student_id:
             integrated_context = _build_integrated_student_context(
                 student_name=student_name,
                 student_id=student_id,
-                max_diary_entries=3,
+                max_diary_entries=8,
             )
 
         session_id = data.get('session_id') or (f"{student_name}__{school}" if student_name else 'default')
