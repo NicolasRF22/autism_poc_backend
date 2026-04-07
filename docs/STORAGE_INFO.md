@@ -1,5 +1,145 @@
 # 📁 Armazenamento de Dados - Autism.IA
 
+## Estado atual (2026-04)
+
+A aplicação usa arquitetura híbrida de armazenamento:
+
+1. **PostgreSQL (Supabase)** para dados estruturados da aplicação.
+2. **ChromaDB** para embeddings e metadados vetoriais do RAG.
+3. **Object Storage (Supabase Storage)** para PDFs (anexos e PEIs gerados).
+4. **Arquivos locais** apenas como compatibilidade/temporário (modo local e arquivos transitórios).
+
+---
+
+## 1) Dados estruturados (PostgreSQL)
+
+Controlado por `DATA_BACKEND` no `backend/.env`:
+
+- `file`: armazenamento local em JSON.
+- `postgres`: armazenamento principal em PostgreSQL.
+- `dual`: escrita em file + postgres (migração/rollout).
+
+No ambiente atual, o backend está operando com suporte a PostgreSQL e metadados de storage remoto.
+
+### Tabelas relevantes
+
+- `schools`, `students`, `teachers`
+- `diary_entries`, `pdis`
+- `case_study_submissions`, `school_registration_submissions`
+- `object_storage_files` (**nova**) para rastrear objetos no Storage
+
+Campos principais em `object_storage_files`:
+
+- `doc_type` (ex.: `rag_attachment_pdf`, `pei_generated_pdf`)
+- `reference_id` (ex.: `doc_id` do RAG, `pei_id`)
+- `bucket`, `object_key`
+- `original_filename`, `mime_type`, `size_bytes`
+- `extra` (JSON de contexto: aluno, escola etc.)
+
+---
+
+## 2) Embeddings e recuperação semântica (ChromaDB)
+
+ChromaDB continua sendo usado para:
+
+- armazenar chunks de texto indexados;
+- armazenar embeddings por chunk;
+- busca semântica para chat RAG e geração de PEI.
+
+Isso não mudou com a migração para Supabase Storage: o **vetor continua no Chroma**.
+
+---
+
+## 3) PDFs no Supabase Storage (novo padrão)
+
+### Buckets privados
+
+- `rag-documents`
+- `pei-documents`
+
+### Fluxo de Anexo RAG
+
+1. API recebe PDF (`/api/rag/upload`).
+2. Salva temporário em `uploads/`.
+3. Extrai texto, divide em chunks, gera embeddings.
+4. Indexa chunks + embeddings no ChromaDB.
+5. Envia PDF original para bucket `rag-documents` com key `{doc_id}.pdf`.
+6. Registra metadado em `object_storage_files`.
+
+### Fluxo de PEI
+
+1. API gera markdown do PEI (`/api/rag/generate-pei`).
+2. Renderiza PDF temporário.
+3. Envia PDF para bucket `pei-documents` com key `{pei_id}.pdf`.
+4. Registra metadado em `object_storage_files`.
+5. Mantém índice de PEI (`peis/index.json`) para compatibilidade do domínio.
+
+### Download/remoção
+
+Downloads seguem por **proxy autenticado no backend**:
+
+- `/api/rag/documents/<doc_id>/download`
+- `/api/rag/peis/<pei_id>/pdf`
+
+Ao remover, backend apaga do vector/index + Storage + metadados.
+
+---
+
+## 4) Variáveis de ambiente de Storage
+
+```env
+OBJECT_STORAGE_BACKEND=supabase
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_xxx
+SUPABASE_STORAGE_BUCKET_RAG=rag-documents
+SUPABASE_STORAGE_BUCKET_PEI=pei-documents
+```
+
+Quando `OBJECT_STORAGE_BACKEND=local`, o backend usa pastas locais equivalentes.
+
+---
+
+## 5) Backfill de arquivos legados
+
+Script implementado para migração de PDFs locais existentes:
+
+- `backend/scripts/backfill_object_storage.py`
+
+Ele:
+
+- sobe arquivos de `backend/rag_documents/` e `backend/peis/` para os buckets;
+- cria metadados em `object_storage_files`;
+- mantém idempotência básica (pula referências já registradas).
+
+---
+
+## 6) Backup e recuperação
+
+### Banco relacional
+
+- usar backup/PITR do Supabase para tabelas.
+
+### Object storage
+
+- usar política de retenção/backup do bucket (conforme plano Supabase).
+
+### ChromaDB
+
+- manter backup de `backend/chroma_db/` ou volume persistente equivalente.
+
+---
+
+## 7) Resumo rápido
+
+| Camada | Tecnologia | Conteúdo |
+|---|---|---|
+| Dados estruturados | Supabase Postgres | Cadastros, diário, PDI, metadados de arquivos |
+| Vetorial | ChromaDB | Chunks e embeddings do RAG |
+| Binários | Supabase Storage (privado) | PDFs de anexos e PEIs |
+| Compatibilidade | Arquivos locais | Transitório/local fallback |
+
+# 📁 Armazenamento de Dados - Autism.IA
+
 ## Sobre o Sistema de Armazenamento
 
 Esta aplicação **NÃO utiliza banco de dados tradicional** (SQL/MongoDB/PostgreSQL).

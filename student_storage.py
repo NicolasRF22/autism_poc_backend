@@ -72,6 +72,7 @@ class StudentStorage:
                 "school_name": student.get("school_name", student.get("schoolName", "")),
                 "class": student.get("class", student.get("className", "")),
                 "grade": student.get("grade", student.get("schoolYear", "")),
+                "case_study_completed": bool(student.get("case_study_completed", False)),
                 "updated_at": student["updated_at"],
             })
         # Ordenar por nome

@@ -52,28 +52,28 @@ class RAGEngine:
         message: str,
         session_id: str = "default",
         context_filter: Optional[Dict] = None,
+        include_vector_documents: bool = True,
         integrated_context: str = "",
         system_prompt_chat: Optional[str] = None,
     ) -> Dict:
         """Processa mensagem usando RAG: busca contexto e responde com Gemini."""
-        # 1. Embedding da query com task_type correto para busca assimétrica
-        query_embedding = generate_embeddings(
-            message,
-            self.api_key,
-            task_type="RETRIEVAL_QUERY",
-            operation="rag_chat_query_embedding",
-        )
-
-        # 2. Extrair termos-chave para busca híbrida (keyword fallback)
-        keywords = _extract_keywords(message)
-
-        # 3. Busca híbrida: vetorial + keyword, k=10 para maior recall
-        similar_docs = self.vector_store.hybrid_search(
-            query_embedding, terms=keywords, k=10, filter_metadata=context_filter
-        )
+        similar_docs = []
+        if include_vector_documents:
+            query_embedding = generate_embeddings(
+                message,
+                self.api_key,
+                task_type="RETRIEVAL_QUERY",
+                operation="rag_chat_query_embedding",
+            )
+            keywords = _extract_keywords(message)
+            similar_docs = self.vector_store.hybrid_search(
+                query_embedding, terms=keywords, k=10, filter_metadata=context_filter
+            )
 
         # 3. Montar contexto
-        if similar_docs:
+        if not include_vector_documents:
+            context_block = "\n(Fonte 'Documentos do RAG' desabilitada para esta conversa.)\n"
+        elif similar_docs:
             context_parts = [
                 f"[{doc['metadata'].get('file_name', 'Documento')}]\n{doc['text']}"
                 for doc in similar_docs
@@ -135,26 +135,31 @@ class RAGEngine:
         additional_info: str = "",
         system_prompt_pei: Optional[str] = None,
         context_filter: Optional[Dict] = None,
+        include_vector_documents: bool = True,
         integrated_context: str = "",
     ) -> Dict:
         """Gera PEI completo estruturado a partir dos documentos indexados."""
         # 1. Buscar documentos relacionados ao estudante
-        query_text = f"{student_name} {school} {additional_info}"
-        query_embedding = generate_embeddings(
-            query_text,
-            self.api_key,
-            task_type="RETRIEVAL_QUERY",
-            operation="pei_query_embedding",
-        )
-        docs = self.vector_store.hybrid_search(
-            query_embedding,
-            terms=_extract_keywords(query_text),
-            k=15,
-            filter_metadata=context_filter,
-        )
+        docs = []
+        if include_vector_documents:
+            query_text = f"{student_name} {school} {additional_info}"
+            query_embedding = generate_embeddings(
+                query_text,
+                self.api_key,
+                task_type="RETRIEVAL_QUERY",
+                operation="pei_query_embedding",
+            )
+            docs = self.vector_store.hybrid_search(
+                query_embedding,
+                terms=_extract_keywords(query_text),
+                k=15,
+                filter_metadata=context_filter,
+            )
 
         # 2. Montar contexto
-        if docs:
+        if not include_vector_documents:
+            context = "(Fonte 'Documentos do RAG' desabilitada para esta geração.)"
+        elif docs:
             context = "\n\n---\n\n".join([doc["text"] for doc in docs])
         else:
             context = "(Nenhum documento encontrado. Gere o PEI com base nas informações fornecidas.)"

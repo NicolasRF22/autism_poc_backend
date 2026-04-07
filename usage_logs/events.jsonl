@@ -12,3 +12,9 @@
 {"timestamp": "2026-03-31T20:04:35.805718-03:00", "model": "gemini-2.5-flash", "operation": "rag_chat_generation", "input_tokens": 16930, "output_tokens": 1441, "total_tokens": 18914}
 {"timestamp": "2026-03-31T20:06:01.838639-03:00", "model": "gemini-embedding-001", "operation": "pei_query_embedding:retrieval_query", "input_tokens": 19, "output_tokens": 0, "total_tokens": 19}
 {"timestamp": "2026-03-31T20:06:49.447159-03:00", "model": "gemini-2.5-flash", "operation": "pei_generation", "input_tokens": 8728, "output_tokens": 7063, "total_tokens": 18831, "duration_ms": 48845}
+{"timestamp": "2026-04-07T00:17:28.891212-03:00", "model": "gemini-embedding-001", "operation": "rag_chat_query_embedding:retrieval_query", "input_tokens": 3, "output_tokens": 0, "total_tokens": 3}
+{"timestamp": "2026-04-07T00:17:32.761616-03:00", "model": "gemini-2.5-flash", "operation": "rag_chat_generation", "input_tokens": 5424, "output_tokens": 29, "total_tokens": 5648}
+{"timestamp": "2026-04-07T00:18:31.590296-03:00", "model": "gemini-embedding-001", "operation": "rag_upload_document_embedding:retrieval_document", "input_tokens": 349, "output_tokens": 0, "total_tokens": 349}
+{"timestamp": "2026-04-07T00:18:32.367749-03:00", "model": "gemini-embedding-001", "operation": "rag_upload_document_embedding:retrieval_document", "input_tokens": 660, "output_tokens": 0, "total_tokens": 660}
+{"timestamp": "2026-04-07T00:18:33.786004-03:00", "model": "gemini-embedding-001", "operation": "rag_upload_document_embedding:retrieval_document", "input_tokens": 655, "output_tokens": 0, "total_tokens": 655}
+{"timestamp": "2026-04-07T00:18:35.256932-03:00", "model": "gemini-embedding-001", "operation": "rag_upload_document_embedding:retrieval_document", "input_tokens": 803, "output_tokens": 0, "total_tokens": 803}

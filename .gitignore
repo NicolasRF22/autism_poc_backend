@@ -1,6 +1,0 @@
-.env
-.env.*
-.env_*
-.env-*
-!.env.example
-*:Zone.Identifier

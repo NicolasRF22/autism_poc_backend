@@ -70,6 +70,7 @@ class SchoolStorage:
                 "cnpj": school.get("cnpj", ""),
                 "institution_type": school.get("institution_type", ""),
                 "city": school.get("address", {}).get("city", "") if isinstance(school.get("address"), dict) else "",
+                "school_registration_completed": bool(school.get("school_registration_completed", False)),
                 "updated_at": school["updated_at"],
             })
         # Ordenar por nome

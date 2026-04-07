@@ -172,7 +172,34 @@ AUTH_ADMIN_USERNAME=admin
 AUTH_ADMIN_PASSWORD=admin123
 AUTH_JWT_SECRET=troque-este-valor-em-producao
 AUTH_TOKEN_EXP_MINUTES=480
+
+# Dados estruturados
+DATA_BACKEND=postgres
+DATABASE_URL=postgresql+psycopg2://...pooler.supabase.com:5432/postgres?sslmode=require
+
+# Object Storage (PDFs)
+OBJECT_STORAGE_BACKEND=supabase
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_xxx
+SUPABASE_STORAGE_BUCKET_RAG=rag-documents
+SUPABASE_STORAGE_BUCKET_PEI=pei-documents
 ```
+
+### Buckets necessários no Supabase Storage
+
+- `rag-documents` (privado)
+- `pei-documents` (privado)
+
+### Backfill de arquivos legados (local → Supabase)
+
+Após configurar o `.env` e reiniciar o backend:
+
+```bash
+cd backend
+python3 scripts/backfill_object_storage.py
+```
+
+Esse script migra PDFs locais de `rag_documents/` e `peis/` para os buckets e registra metadados em `object_storage_files`.
 
 ## 📊 Export de Dados
 
