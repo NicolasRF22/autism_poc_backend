@@ -1,0 +1,11 @@
+.env
+.env.*
+.env_*
+.env-*
+!.env.example
+*:Zone.Identifier
+# local env
+.env
+.env.*
+*.env
+*.local
