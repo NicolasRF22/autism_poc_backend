@@ -96,15 +96,14 @@ CHROMA_COLLECTION_NAME=documentos_pei
 
 ### 📝 Sobre Armazenamento de Dados
 
-**IMPORTANTE:** Esta aplicação **NÃO usa banco de dados tradicional** (SQL/MongoDB).
+Arquitetura atual de produção:
 
-Os dados são armazenados em:
-- **Arquivos JSON** - Cadastros de escolas, alunos, diários, PEIs e PDIs
-- **Arquivos JSON** - Usuários de autenticação (`backend/users/index.json`)
-- **ChromaDB** - Apenas para vector store (embeddings do RAG)
-- **Arquivo JSONL** - Eventos de auditoria (`backend/audit_logs/events.jsonl`)
+- **PostgreSQL (Supabase)** para dados estruturados (cadastros, diário, PDI etc.)
+- **ChromaDB** para vetor/embeddings do RAG
+- **Supabase Storage (privado)** para PDFs de anexos e PEIs
+- **Tabela `object_storage_files`** no Postgres para metadados de arquivos remotos
 
-Arquivos criados automaticamente:
+Arquivos locais criados automaticamente (compatibilidade/temporário):
 - `backend/schools/index.json`
 - `backend/students/index.json`
 - `backend/diaries/`
@@ -113,6 +112,23 @@ Arquivos criados automaticamente:
 - `backend/chroma_db/` (vector store)
 - `backend/users/index.json` (usuários)
 - `backend/audit_logs/events.jsonl` (auditoria)
+
+### Object Storage (obrigatório para PDFs remotos)
+
+Configure no `.env`:
+
+```env
+OBJECT_STORAGE_BACKEND=supabase
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_xxx
+SUPABASE_STORAGE_BUCKET_RAG=rag-documents
+SUPABASE_STORAGE_BUCKET_PEI=pei-documents
+```
+
+No painel Supabase Storage, crie buckets privados:
+
+- `rag-documents`
+- `pei-documents`
 
 ### 2. Frontend (Variável de ambiente)
 
@@ -183,7 +199,8 @@ serve -s dist -l 3000
 - [ ] HTTPS configurado (use Nginx + Let's Encrypt)
 - [ ] `.env` no `.gitignore` (não versionar credenciais)
 - [ ] Limitar taxa de requisições (rate limiting)
-- [ ] Fazer backup regular dos arquivos JSON/JSONL (schools/, students/, users/, audit_logs/, etc.)
+- [ ] Fazer backup regular do Postgres + Storage + ChromaDB
+- [ ] Rotacionar `SUPABASE_SERVICE_ROLE_KEY` se compartilhada fora de cofre seguro
 
 ### Configuração Nginx (Recomendado)
 

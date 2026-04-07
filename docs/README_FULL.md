@@ -26,7 +26,13 @@ O RAG (Retrieval-Augmented Generation) é a técnica central do sistema. Em vez 
                         │     (Gemini gemini-embedding-001)           │
                         │         ↓                                   │
                         │  4. Armazenamento no ChromaDB               │
-                        │     (com metadados: aluno, escola, arquivo) │
+                        │     (chunks + embeddings)                   │
+                        │         ↓                                   │
+                        │  5. Armazenamento do PDF original           │
+                        │     no Supabase Storage (bucket privado)    │
+                        │         ↓                                   │
+                        │  6. Registro de metadado em Postgres        │
+                        │     (tabela object_storage_files)           │
                         └─────────────────────────────────────────────┘
 
                         ┌─────────────────────────────────────────────┐
@@ -71,6 +77,29 @@ Embeddings são representações numéricas do significado do texto. Textos sema
 ## Estrutura do Projeto
 
 ```
+
+## Tabelas SQL (Postgres)
+
+Persistidas via SQLAlchemy (repositórios em [backend/postgres_repositories.py](../postgres_repositories.py)):
+
+- `schools`
+- `students`
+- `teachers`
+- `diary_entries`
+- `pdis`
+- `case_study_submissions`
+- `school_registration_submissions`
+- `object_storage_files` (metadados de arquivos no Supabase Storage)
+
+## Funcionalidades principais
+
+- Autenticação JWT com perfis `admin`, `editor`, `viewer`.
+- Cadastro de escola, estudante e docente com vínculos entre entidades.
+- Diário individual e PDI individual por estudante.
+- Anexos em PDF por aluno na página dedicada `/anexos`.
+- Indexação RAG (extração, chunking, embeddings, busca semântica).
+- Chat contextual e geração de PEI com seleção de fontes.
+- Persistência de PDFs em Supabase Storage (buckets privados).
 Aut/
 ├── backend/
 │   ├── app.py                # API Flask — endpoints REST
@@ -106,6 +135,8 @@ Aut/
 | LLM | Google Gemini 2.5 Flash |
 | Embeddings | Google `gemini-embedding-001` |
 | Banco vetorial | ChromaDB (persistente, similaridade de cosseno) |
+| Banco relacional | Supabase Postgres |
+| Object storage | Supabase Storage (privado) |
 | Backend | Python 3.12 + Flask |
 | Frontend | React + Vite |
 
@@ -191,7 +222,24 @@ Credenciais padrão iniciais (podem ser sobrescritas por ambiente):
 | `POST` | `/api/rag/generate-pei` | Gera PEI estruturado para um aluno |
 | `GET` | `/api/rag/documents` | Lista documentos indexados |
 | `GET` | `/api/rag/students` | Lista alunos com documentos indexados |
+| `GET` | `/api/rag/documents/<doc_id>/download` | Download do PDF original do anexo |
+| `GET` | `/api/rag/peis/<pei_id>/pdf` | Download/visualização do PDF do PEI |
 | `DELETE` | `/api/rag/documents/<doc_id>` | Remove documento do índice |
+
+### Configuração de object storage (backend/.env)
+
+```env
+OBJECT_STORAGE_BACKEND=supabase
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_xxx
+SUPABASE_STORAGE_BUCKET_RAG=rag-documents
+SUPABASE_STORAGE_BUCKET_PEI=pei-documents
+```
+
+Buckets privados necessários no Supabase:
+
+- `rag-documents`
+- `pei-documents`
 
 ### Administração e Auditoria (admin)
 | Método | Endpoint | Descrição |

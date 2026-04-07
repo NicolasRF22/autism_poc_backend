@@ -221,5 +221,34 @@
     "created_at": "2026-03-01T19:03:56.154733",
     "updated_at": "2026-03-29T20:02:45.823184",
     "student_id": "01c09fa5-c64e-45d6-9734-4008b092bd8a"
+  },
+  {
+    "id": "85bb7579-2fbc-4eb9-b312-4b4a46b93cc1",
+    "student_id": "c7683688-3000-46ec-b833-98259164763b",
+    "student_name": "Aluno Teste Fase2",
+    "birth_date": "2015-01-01",
+    "guardians": [
+      "Responsável 1",
+      "Responsável 2"
+    ],
+    "diagnosis": "TEA",
+    "class": "5A",
+    "teachers": [
+      "Docente Fase2",
+      "Docente Fase2B"
+    ],
+    "trimesters": {
+      "trimester_1": {
+        "goals": "meta 1"
+      },
+      "trimester_2": {
+        "goals": "meta 2 ajustada"
+      },
+      "trimester_3": {
+        "goals": "meta 3"
+      }
+    },
+    "created_at": "2026-04-06T21:24:36.935584-03:00",
+    "updated_at": "2026-04-06T21:24:46.026884-03:00"
   }
 ]

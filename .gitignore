@@ -4,3 +4,8 @@
 .env-*
 !.env.example
 *:Zone.Identifier
+# local env
+.env
+.env.*
+*.env
+*.local

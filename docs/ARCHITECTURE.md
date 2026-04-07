@@ -1,5 +1,7 @@
 # 🏗️ Arquitetura da Aplicação Autism.IA
 
+> **Atualização (2026-04):** a arquitetura atual combina **Supabase Postgres + ChromaDB + Supabase Storage**.
+
 ## 📊 Visão Geral
 
 ```
@@ -49,6 +51,15 @@
 ---
 
 ## 🗄️ Armazenamento Detalhado
+
+## 🆕 Estado atual (fonte de verdade)
+
+1. **Postgres (Supabase)** para dados estruturados da aplicação.
+2. **ChromaDB** para chunks e embeddings do RAG.
+3. **Supabase Storage (privado)** para binários PDF (anexos e PEIs).
+4. **Tabela `object_storage_files`** no Postgres para metadados de objetos remotos.
+
+> As seções abaixo com JSON local permanecem como referência histórica/compatibilidade.
 
 ### 1. Arquivos JSON (Dados Estruturados)
 
@@ -141,6 +152,31 @@ backend/
 
 ---
 
+### 3. Supabase Storage (Object Storage)
+
+Buckets privados:
+
+- `rag-documents`
+- `pei-documents`
+
+Padrões de chave:
+
+- RAG: `{doc_id}.pdf`
+- PEI: `{pei_id}.pdf`
+
+Metadados persistidos em `object_storage_files`:
+
+- `doc_type`
+- `reference_id`
+- `bucket`
+- `object_key`
+- `original_filename`
+- `mime_type`
+- `size_bytes`
+- `extra`
+
+---
+
 ## 🔄 Fluxo de Dados
 
 ### 1. Cadastro de Escola/Aluno
@@ -165,34 +201,30 @@ Frontend          Backend              JSON Files
 ### 2. Upload de Documento para RAG
 
 ```
-Frontend          Backend         Gemini API      ChromaDB
-   │                │                 │               │
-   ├─ POST /upload ►                 │               │
-   │    (PDF)       │                 │               │
-   │                │                 │               │
-   │             extrai               │               │
-   │             texto                │               │
-   │                │                 │               │
-   │             divide               │               │
-   │             em chunks            │               │
-   │                │                 │               │
-   │                ├─ gera embeddings►              │
-   │                │                 │               │
-   │                │◄─ vetores ──────               │
-   │                │    [0.1, 0.2,...]              │
-   │                │                 │               │
-   │                ├─────────────────┴─► armazena   │
-   │                │                     vetores +  │
-   │                │                     chunks     │
-   │                │                                │
-   │◄─── sucesso ───                                │
+Frontend          Backend         Gemini API      ChromaDB     Supabase Storage   Postgres
+    │                │                 │               │               │               │
+    ├─ POST /upload ►                 │               │               │               │
+    │    (PDF)       │                 │               │               │               │
+    │                │             extrai texto       │               │               │
+    │                │             e chunking         │               │               │
+    │                │                 │               │               │               │
+    │                ├─ gera embeddings►              │               │               │
+    │                │◄─ vetores ──────               │               │               │
+    │                │                                 │               │               │
+    │                ├─────────────────► indexa chunks+vetores         │               │
+    │                │                                 │               │               │
+    │                ├───────────────────────────────────────────────► upload PDF     │
+    │                │                                                 │               │
+    │                └───────────────────────────────────────────────────────────────► grava metadado
+    │
+    │◄─── sucesso ───
 ```
 
 ### 3. Geração de PEI (RAG)
 
 ```
-Frontend          Backend         RAG Engine     ChromaDB      Gemini
-   │                │                 │             │            │
+Frontend          Backend         RAG Engine     ChromaDB      Gemini      Supabase Storage
+    │                │                 │             │            │               │
    ├─ POST /pei ────►                │             │            │
    │   { student,   │                │             │            │
    │     school }   │                │             │            │
@@ -211,10 +243,11 @@ Frontend          Backend         RAG Engine     ChromaDB      Gemini
    │                │                 ├─ gera PEI ─────────────►
    │                │                 │  com contexto           │
    │                │                 │                         │
-   │                │                 │◄─ PEI markdown ─────────┘
-   │                │                 │                         │
-   │                │◄─ retorna PEI ──                         │
-   │                │   + PDF                                   │
+    │                │                 │◄─ PEI markdown ─────────┘               │
+    │                │                 │                                           │
+    │                ├────────────────────────────────────────────────────────────► upload PDF PEI
+    │                │                                                           │
+    │                │◄─ retorna PEI + URL PDF                                   │
    │                │                                           │
    │◄─── PEI ───────                                           │
    │    pronto                                                  │
