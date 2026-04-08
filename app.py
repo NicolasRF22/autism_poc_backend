@@ -193,11 +193,48 @@ def _get_object_metadata(doc_type: str, reference_id: str) -> Optional[Dict]:
     return repository.get_file(doc_type=doc_type, reference_id=reference_id)
 
 
+def _list_object_metadata(doc_type: str, bucket: str = '') -> List[Dict]:
+    repository = _get_object_metadata_repo()
+    if not repository or not hasattr(repository, 'list_files'):
+        return []
+    return repository.list_files(doc_type=doc_type, bucket=bucket or None)
+
+
 def _delete_object_metadata(doc_type: str, reference_id: str):
     repository = _get_object_metadata_repo()
     if not repository:
         return False
     return repository.delete_file(doc_type=doc_type, reference_id=reference_id)
+
+
+def _build_pei_entry_from_metadata(file_meta: Dict) -> Dict:
+    extra = file_meta.get('extra') or {}
+    return {
+        'id': file_meta.get('reference_id', ''),
+        'student_name': extra.get('student_name') or 'Aluno não identificado',
+        'school': extra.get('school') or '',
+        'created_at': file_meta.get('created_at') or '',
+        'pdf_filename': file_meta.get('original_filename') or f"{file_meta.get('reference_id', '')}.pdf",
+    }
+
+
+def _list_all_peis_with_metadata_fallback() -> List[Dict]:
+    local_entries = _pei_storage.list_all()
+    merged_by_id = {
+        str(item.get('id') or '').strip(): dict(item)
+        for item in local_entries
+        if str(item.get('id') or '').strip()
+    }
+
+    for file_meta in _list_object_metadata(PEI_DOC_TYPE, PEI_STORAGE_BUCKET):
+        reference_id = str(file_meta.get('reference_id') or '').strip()
+        if not reference_id or reference_id in merged_by_id:
+            continue
+        merged_by_id[reference_id] = _build_pei_entry_from_metadata(file_meta)
+
+    merged_entries = list(merged_by_id.values())
+    merged_entries.sort(key=lambda item: item.get('created_at') or '', reverse=True)
+    return merged_entries
 
 
 def _sync_legacy_diary_links() -> int:
@@ -416,15 +453,34 @@ def _parse_selected_sources(raw_selection) -> Dict[str, bool]:
     return parsed
 
 
-def _list_linked_peis(student_name: str, school: str = '', max_items: int = 5) -> List[Dict]:
-    normalized_student = _normalize_student_name(student_name)
-    normalized_school = _normalize_student_name(school)
+def _entry_matches_student(entry: Dict, student_id: str, student_name: str, school: str = '') -> bool:
+    entry_student_id = (entry.get('student_id') or '').strip()
+    if student_id and entry_student_id:
+        if entry_student_id != student_id:
+            return False
+        if school and _normalize_student_name(entry.get('school', '')) != _normalize_student_name(school):
+            return False
+        return True
 
+    # Compatibilidade: PEIs legados podem não ter student_id salvo.
+    # Quando o filtro chega com student_id, priorizamos match por nome do aluno
+    # para não perder histórico antigo após esta migração.
+    if student_id and not entry_student_id:
+        return _normalize_student_name(entry.get('student_name', '')) == _normalize_student_name(student_name)
+
+    if _normalize_student_name(entry.get('student_name', '')) != _normalize_student_name(student_name):
+        return False
+
+    if school and _normalize_student_name(entry.get('school', '')) != _normalize_student_name(school):
+        return False
+
+    return True
+
+
+def _list_linked_peis(student_name: str, student_id: str = '', school: str = '', max_items: int = 10) -> List[Dict]:
     entries = []
-    for item in _pei_storage.list_all():
-        if _normalize_student_name(item.get('student_name', '')) != normalized_student:
-            continue
-        if school and _normalize_student_name(item.get('school', '')) != normalized_school:
+    for item in _list_all_peis_with_metadata_fallback():
+        if not _entry_matches_student(item, student_id=student_id, student_name=student_name, school=school):
             continue
         entries.append(item)
 
@@ -502,7 +558,7 @@ def _build_integrated_student_context(
             + json.dumps(pdi, ensure_ascii=False, indent=2)
         )
 
-    linked_peis = _list_linked_peis(canonical_student_name)
+    linked_peis = _list_linked_peis(canonical_student_name, student_id=student_id)
     if source_selection.get('linked_peis') and linked_peis:
         pei_summaries = []
         for entry in linked_peis:
@@ -582,7 +638,7 @@ def get_pei_sources_preview():
 
     diary_entries = _get_diary_entries_for_student(student_name, student_id=student_id)
     pdi = _get_pdi_for_student(student_name, student_id=student_id)
-    linked_peis = _list_linked_peis(student_name, school=school)
+    linked_peis = _list_linked_peis(student_name, student_id=student_id, school=school)
 
     engine = get_rag_engine()
     docs_summary = _summarize_vector_documents_for_student(engine, student_name, school)
@@ -2944,12 +3000,15 @@ def generate_pei():
             school=school,
             markdown_text=markdown_text,
             pdf_path=temp_pdf_path,
+            student_id=student_id or None,
+            generated_by_user_id=(getattr(g, 'current_user', {}) or {}).get('id'),
+            generated_by_username=(getattr(g, 'current_user', {}) or {}).get('username'),
         )
 
         with open(temp_pdf_path, 'rb') as generated_pdf:
             pdf_bytes = generated_pdf.read()
 
-        pei_object_key = f"{entry['id']}.pdf"
+        pei_object_key = entry.get('pdf_filename') or f"{entry['id']}.pdf"
         _object_storage.upload_file(
             bucket=PEI_STORAGE_BUCKET,
             object_key=pei_object_key,
@@ -3067,13 +3126,20 @@ def reset_chat_prompt():
 def list_peis():
     """Lista todos os PEIs gerados"""
     try:
-        student_filter = request.args.get('student_name')
-        school_filter = request.args.get('school')
-        peis = _pei_storage.list_all()
-        if student_filter:
-            peis = [p for p in peis if p['student_name'] == student_filter]
-        if school_filter:
-            peis = [p for p in peis if p['school'] == school_filter]
+        student_id_filter = request.args.get('student_id', '').strip()
+        student_filter = request.args.get('student_name', '').strip()
+        school_filter = request.args.get('school', '').strip()
+        peis = _list_all_peis_with_metadata_fallback()
+        if student_id_filter or student_filter or school_filter:
+            peis = [
+                p for p in peis
+                if _entry_matches_student(
+                    p,
+                    student_id=student_id_filter,
+                    student_name=student_filter or p.get('student_name', ''),
+                    school=school_filter,
+                )
+            ]
         return jsonify(peis)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -3083,10 +3149,11 @@ def list_peis():
 def get_pei_pdf(pei_id):
     """Serve o arquivo PDF de um PEI"""
     pei_entry = _pei_storage.get(pei_id)
-    if not pei_entry:
+    file_meta = _get_object_metadata(PEI_DOC_TYPE, pei_id)
+
+    if not pei_entry and not file_meta:
         return jsonify({"error": "PEI não encontrado"}), 404
 
-    file_meta = _get_object_metadata(PEI_DOC_TYPE, pei_id)
     object_key = file_meta.get('object_key') if file_meta else f'{pei_id}.pdf'
 
     try:
@@ -3098,7 +3165,11 @@ def get_pei_pdf(pei_id):
         BytesIO(file_bytes),
         mimetype='application/pdf',
         as_attachment=False,
-        download_name=pei_entry.get('pdf_filename') or f'{pei_id}.pdf',
+        download_name=(
+            (pei_entry or {}).get('pdf_filename')
+            or (file_meta or {}).get('original_filename')
+            or f'{pei_id}.pdf'
+        ),
     )
 
 
@@ -3110,7 +3181,8 @@ def delete_pei(pei_id):
     _object_storage.delete_file(PEI_STORAGE_BUCKET, object_key)
     _delete_object_metadata(PEI_DOC_TYPE, pei_id)
 
-    if _pei_storage.delete(pei_id):
+    local_deleted = _pei_storage.delete(pei_id)
+    if local_deleted or file_meta:
         return jsonify({"message": "PEI removido"})
     return jsonify({"error": "PEI não encontrado"}), 404
 

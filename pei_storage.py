@@ -30,14 +30,25 @@ class PEIStorage:
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
-    def save(self, student_name: str, school: str,
-             markdown_text: str, pdf_path: str) -> Dict:
+    def save(
+        self,
+        student_name: str,
+        school: str,
+        markdown_text: str,
+        pdf_path: str,
+        student_id: Optional[str] = None,
+        generated_by_user_id: Optional[str] = None,
+        generated_by_username: Optional[str] = None,
+    ) -> Dict:
         """Registra um novo PEI gerado no índice."""
         pei_id = str(uuid.uuid4())
         entry = {
             "id": pei_id,
+            "student_id": student_id,
             "student_name": student_name,
             "school": school,
+            "generated_by_user_id": generated_by_user_id,
+            "generated_by_username": generated_by_username,
             "created_at": now_brasilia_iso(),
             "pdf_filename": os.path.basename(pdf_path),
             "markdown": markdown_text,

@@ -981,6 +981,19 @@ class ObjectStorageMetadataPostgresRepository:
                 return None
             return self._to_entity(record)
 
+    def list_files(self, doc_type: str, bucket: Optional[str] = None) -> List[Dict]:
+        with self._session() as session:
+            stmt = select(ObjectStorageFileRecord).where(
+                ObjectStorageFileRecord.doc_type == str(doc_type or '').strip(),
+            )
+            if bucket:
+                stmt = stmt.where(ObjectStorageFileRecord.bucket == str(bucket).strip())
+
+            records = session.execute(stmt).scalars().all()
+            entities = [self._to_entity(record) for record in records]
+            entities.sort(key=lambda item: item.get('created_at') or '', reverse=True)
+            return entities
+
     def delete_file(self, doc_type: str, reference_id: str) -> bool:
         with self._session() as session:
             record = session.execute(
