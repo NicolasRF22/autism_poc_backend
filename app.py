@@ -118,11 +118,6 @@ _school_storage = SchoolStorage(storage_dir=SCHOOLS_FOLDER)
 _municipality_storage = MunicipalityStorage(storage_dir=MUNICIPALITIES_FOLDER)
 _student_storage = StudentStorage(storage_dir=STUDENTS_FOLDER)
 _teacher_storage = TeacherStorage(storage_dir=TEACHERS_FOLDER)
-_auth_storage = AuthStorage(
-    storage_dir=USERS_FOLDER,
-    default_admin_username=os.getenv('AUTH_ADMIN_USERNAME', 'admin'),
-    default_admin_password=os.getenv('AUTH_ADMIN_PASSWORD', ''),
-)
 _audit_storage = AuditStorage(storage_dir=AUDIT_FOLDER)
 
 DATA_BACKEND = (os.getenv('DATA_BACKEND', 'file') or 'file').strip().lower()
@@ -144,6 +139,15 @@ if DATA_BACKEND in {'postgres', 'dual'}:
         print('Aviso: DATA_BACKEND=dual sem DATABASE_URL; usando apenas armazenamento em arquivo.')
     else:
         _postgres_repositories = create_postgres_repositories(DATABASE_URL)
+
+if _postgres_repositories is not None:
+    _auth_storage = _postgres_repositories['auth']
+else:
+    _auth_storage = AuthStorage(
+        storage_dir=USERS_FOLDER,
+        default_admin_username=os.getenv('AUTH_ADMIN_USERNAME', 'admin'),
+        default_admin_password=os.getenv('AUTH_ADMIN_PASSWORD', ''),
+    )
 
 try:
     _object_storage = build_object_storage(

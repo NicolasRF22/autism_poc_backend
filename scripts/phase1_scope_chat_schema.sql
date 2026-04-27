@@ -4,8 +4,9 @@
 begin;
 
 create table if not exists public.user_profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
   username text unique,
+  password_hash text,
   full_name text,
   role text not null check (role in (
     'admin',

@@ -103,6 +103,12 @@ Arquitetura atual de produção:
 - **Supabase Storage (privado)** para PDFs de anexos e PEIs
 - **Tabela `object_storage_files`** no Postgres para metadados de arquivos remotos
 
+No Render, o backend deve subir com `DATA_BACKEND=postgres` e `OBJECT_STORAGE_BACKEND=supabase`.
+Além disso, o `startCommand` do serviço executa um espelhamento idempotente antes de iniciar o Flask,
+para copiar os JSONs versionados no repositório para o Supabase sempre que houver deploy,
+incluindo remoções locais que precisem refletir no banco remoto.
+Os usuários de autenticação também seguem esse mesmo fluxo e passam a ser persistidos em `public.user_profiles`.
+
 Arquivos locais criados automaticamente (compatibilidade/temporário):
 - `backend/schools/index.json`
 - `backend/students/index.json`
@@ -170,6 +176,16 @@ python -c "from dotenv import load_dotenv; import os; load_dotenv('backend/.env'
 
 # Rodar em produção
 cd backend && python app.py
+```
+
+No Render, use o `render.yaml` do repositório ou configure manualmente o serviço com:
+
+```env
+DATA_BACKEND=postgres
+OBJECT_STORAGE_BACKEND=supabase
+DATABASE_URL=<sua-url-do-supabase>
+SUPABASE_URL=<sua-url-do-supabase>
+SUPABASE_SERVICE_ROLE_KEY=<sua-service-role-key>
 ```
 
 ### 2. Frontend

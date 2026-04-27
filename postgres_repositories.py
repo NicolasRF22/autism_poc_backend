@@ -2,7 +2,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Dict, List, Optional
 
-from sqlalchemy import JSON, Integer, String, Text, UniqueConstraint, create_engine, select
+from sqlalchemy import JSON, Integer, String, Text, UniqueConstraint, create_engine, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from time_utils import now_brasilia_iso
@@ -62,6 +62,22 @@ class PDIRecord(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class UserProfileRecord(Base):
+    __tablename__ = 'user_profiles'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    municipio_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    school_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    teacher_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
@@ -176,6 +192,256 @@ class _BaseRepository:
                 return False
             session.delete(record)
             return True
+
+
+class PostgresAuthRepository:
+    VALID_ROLES = {
+        'admin',
+        'secretaria',
+        'coordenacao',
+        'professor',
+        'viewer',
+    }
+
+    def __init__(self, session_factory, default_admin_username: str = 'admin', default_admin_password: str = ''):
+        self._session_factory = session_factory
+        self.default_admin_username = str(default_admin_username or 'admin').strip() or 'admin'
+        self.default_admin_password = default_admin_password or ''
+        self._ensure_default_admin()
+
+    @contextmanager
+    def _session(self):
+        session: Session = self._session_factory()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    @staticmethod
+    def _sanitize_user(user: UserProfileRecord) -> Dict:
+        return {
+            'id': user.id,
+            'username': user.username,
+            'name': user.full_name or '',
+            'role': user.role,
+            'municipio_id': user.municipio_id or '',
+            'school_id': user.school_id or '',
+            'teacher_id': user.teacher_id or '',
+            'is_active': bool(user.is_active),
+            'created_at': user.created_at,
+            'updated_at': user.updated_at,
+        }
+
+    def _get_raw_user_by_id(self, user_id: str) -> Optional[UserProfileRecord]:
+        with self._session() as session:
+            return session.get(UserProfileRecord, str(user_id or '').strip())
+
+    def _get_raw_user_by_username(self, username: str) -> Optional[UserProfileRecord]:
+        normalized_username = str(username or '').strip().lower()
+        if not normalized_username:
+            return None
+        with self._session() as session:
+            return session.execute(
+                select(UserProfileRecord).where(text('lower(username) = :username')).params(username=normalized_username)
+            ).scalar_one_or_none()
+
+    def _ensure_default_admin(self) -> None:
+        if self.list_users():
+            return
+        if not self.default_admin_password:
+            raise RuntimeError('AUTH_ADMIN_PASSWORD não configurada. Defina no .env para criar o admin inicial.')
+
+        self.create_user(
+            username=self.default_admin_username,
+            password=self.default_admin_password,
+            role='admin',
+            name='Administrador',
+        )
+
+    def list_users(self) -> List[Dict]:
+        with self._session() as session:
+            rows = session.execute(select(UserProfileRecord)).scalars().all()
+        users = [self._sanitize_user(row) for row in rows]
+        return sorted(users, key=lambda item: item['username'].lower())
+
+    def get_user_by_id(self, user_id: str) -> Optional[Dict]:
+        with self._session() as session:
+            user = session.get(UserProfileRecord, str(user_id or '').strip())
+            return self._sanitize_user(user) if user else None
+
+    def authenticate(self, username: str, password: str) -> Optional[Dict]:
+        from werkzeug.security import check_password_hash
+
+        user = self._get_raw_user_by_username(username)
+        if not user or not user.is_active:
+            return None
+
+        if not user.password_hash or not check_password_hash(user.password_hash, password):
+            return None
+
+        return self._sanitize_user(user)
+
+    def _validate_role(self, role: str) -> str:
+        role = (role or '').strip().lower()
+        if role not in self.VALID_ROLES:
+            raise ValueError('Perfil inválido')
+        return role
+
+    def _validate_scope(self, role: str, municipio_id: str, school_id: str) -> None:
+        if role == 'secretaria' and not municipio_id:
+            raise ValueError('Usuário secretaria exige municipio_id')
+        if role == 'coordenacao' and not school_id:
+            raise ValueError('Usuário de coordenação exige school_id')
+        if role == 'professor' and not school_id:
+            raise ValueError('Usuário professor exige school_id')
+        if role == 'viewer' and not (municipio_id or school_id):
+            raise ValueError('Usuário viewer exige municipio_id ou school_id')
+
+    def create_user(
+        self,
+        username: str,
+        password: str,
+        role: str,
+        name: str = '',
+        municipio_id: str = '',
+        school_id: str = '',
+        teacher_id: str = '',
+    ) -> Dict:
+        from werkzeug.security import generate_password_hash
+
+        username = (username or '').strip().lower()
+        role = self._validate_role(role)
+        if len(username) < 3:
+            raise ValueError('Nome de usuário deve ter ao menos 3 caracteres')
+        if len(password or '') < 6:
+            raise ValueError('Senha deve ter ao menos 6 caracteres')
+        if self._get_raw_user_by_username(username):
+            raise ValueError('Nome de usuário já existe')
+
+        name = (name or '').strip()
+        municipio_id = (municipio_id or '').strip()
+        school_id = (school_id or '').strip()
+        teacher_id = (teacher_id or '').strip()
+        self._validate_scope(role, municipio_id, school_id)
+
+        now = now_brasilia_iso()
+        with self._session() as session:
+            user = UserProfileRecord(
+                id=str(uuid.uuid4()),
+                username=username,
+                password_hash=generate_password_hash(password),
+                full_name=name,
+                role=role,
+                municipio_id=municipio_id or None,
+                school_id=school_id or None,
+                teacher_id=teacher_id or None,
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(user)
+            session.flush()
+            return self._sanitize_user(user)
+
+    def upsert_user(
+        self,
+        user_id: str,
+        username: str,
+        password_hash: Optional[str],
+        role: str,
+        name: str = '',
+        municipio_id: str = '',
+        school_id: str = '',
+        teacher_id: str = '',
+        is_active: bool = True,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> Dict:
+        role = self._validate_role(role)
+        username = (username or '').strip().lower()
+        if len(username) < 3:
+            raise ValueError('Nome de usuário deve ter ao menos 3 caracteres')
+
+        name = (name or '').strip()
+        municipio_id = (municipio_id or '').strip()
+        school_id = (school_id or '').strip()
+        teacher_id = (teacher_id or '').strip()
+        self._validate_scope(role, municipio_id, school_id)
+
+        now = now_brasilia_iso()
+        user_id = str(user_id or '').strip() or str(uuid.uuid4())
+        with self._session() as session:
+            record = session.get(UserProfileRecord, user_id)
+            if record is None:
+                record = UserProfileRecord(
+                    id=user_id,
+                    username=username,
+                    password_hash=password_hash,
+                    full_name=name,
+                    role=role,
+                    municipio_id=municipio_id or None,
+                    school_id=school_id or None,
+                    teacher_id=teacher_id or None,
+                    is_active=bool(is_active),
+                    created_at=created_at or now,
+                    updated_at=updated_at or now,
+                )
+                session.add(record)
+                session.flush()
+                return self._sanitize_user(record)
+
+            record.username = username
+            if password_hash:
+                record.password_hash = password_hash
+            record.full_name = name
+            record.role = role
+            record.municipio_id = municipio_id or None
+            record.school_id = school_id or None
+            record.teacher_id = teacher_id or None
+            record.is_active = bool(is_active)
+            if created_at:
+                record.created_at = created_at
+            record.updated_at = updated_at or now
+            session.flush()
+            return self._sanitize_user(record)
+
+    def update_user_role(self, user_id: str, role: str) -> Optional[Dict]:
+        role = self._validate_role(role)
+        with self._session() as session:
+            record = session.get(UserProfileRecord, str(user_id or '').strip())
+            if not record:
+                return None
+
+            record.role = role
+            record.updated_at = now_brasilia_iso()
+            session.flush()
+            return self._sanitize_user(record)
+
+    def delete_user(self, user_id: str, acting_user_id: str = '') -> Optional[Dict]:
+        user_id = str(user_id or '').strip()
+        acting_user_id = str(acting_user_id or '').strip()
+        with self._session() as session:
+            record = session.get(UserProfileRecord, user_id)
+            if not record:
+                return None
+
+            if acting_user_id and user_id == acting_user_id:
+                raise ValueError('Você não pode apagar o seu próprio usuário')
+
+            if record.role == 'admin':
+                admin_count = session.execute(
+                    select(UserProfileRecord.id).where(UserProfileRecord.role == 'admin')
+                ).all()
+                if len(admin_count) <= 1:
+                    raise ValueError('Não é possível apagar o último usuário admin')
+
+            sanitized = self._sanitize_user(record)
+            session.delete(record)
+            return sanitized
 
 
 class SchoolPostgresRepository(_BaseRepository):
@@ -462,6 +728,24 @@ class MunicipalityPostgresRepository(_BaseRepository):
             session.flush()
             return self._to_entity(record)
 
+    def update_municipality(
+        self,
+        municipio_id: str,
+        name: str,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> Optional[Dict]:
+        with self._session() as session:
+            record = session.get(MunicipalityRecord, municipio_id)
+            if not record:
+                return None
+
+            record.payload = {'name': name}
+            if created_at:
+                record.created_at = created_at
+            record.updated_at = updated_at or now_brasilia_iso()
+            return self._to_entity(record)
+
     def get_municipality(self, municipio_id: str) -> Optional[Dict]:
         return self._get(municipio_id)
 
@@ -474,6 +758,9 @@ class MunicipalityPostgresRepository(_BaseRepository):
             for row in rows
         ]
         return sorted(municipalities, key=lambda value: (value.get('name') or '').lower())
+
+    def delete_municipality(self, municipio_id: str) -> bool:
+        return self._delete(municipio_id)
 
 
 class DiaryPostgresRepository(_BaseRepository):
@@ -1318,9 +1605,18 @@ class ChatHistoryPostgresRepository:
 def create_postgres_repositories(database_url: str):
     engine = create_engine(database_url, future=True)
     Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(text('ALTER TABLE public.user_profiles DROP CONSTRAINT IF EXISTS user_profiles_id_fkey'))
+        connection.execute(text('ALTER TABLE public.user_profiles ADD COLUMN IF NOT EXISTS password_hash text'))
+        connection.execute(text('ALTER TABLE public.user_profiles ADD COLUMN IF NOT EXISTS full_name text'))
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
 
     return {
+        'auth': PostgresAuthRepository(
+            session_factory,
+            default_admin_username=os.getenv('AUTH_ADMIN_USERNAME', 'admin'),
+            default_admin_password=os.getenv('AUTH_ADMIN_PASSWORD', ''),
+        ),
         'municipality': MunicipalityPostgresRepository(session_factory),
         'school': SchoolPostgresRepository(session_factory),
         'student': StudentPostgresRepository(session_factory),
