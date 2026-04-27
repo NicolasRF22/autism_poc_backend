@@ -60,6 +60,7 @@ class TeacherStorage:
             summaries.append({
                 "id": teacher["id"],
                 "name": teacher.get("name", ""),
+                "school_id": teacher.get("school_id", ""),
                 "school_name": teacher.get("school_name", ""),
                 "specialization": teacher.get("specialization", ""),
                 "updated_at": teacher["updated_at"],

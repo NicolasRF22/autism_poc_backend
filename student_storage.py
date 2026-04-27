@@ -65,11 +65,18 @@ class StudentStorage:
         """Retorna lista de todos os alunos com informações resumidas."""
         summaries = []
         for student in self._index:
+            teacher_ids = student.get("teacher_ids") if isinstance(student.get("teacher_ids"), list) else []
+            legacy_teacher_id = str(student.get("teacher_id", "")).strip()
+            if legacy_teacher_id and legacy_teacher_id not in teacher_ids:
+                teacher_ids = [*teacher_ids, legacy_teacher_id]
             summaries.append({
                 "id": student["id"],
                 "name": self._student_name(student),
                 "age": student.get("age", student.get("studentAge", "")),
+                "school_id": student.get("school_id", ""),
                 "school_name": student.get("school_name", student.get("schoolName", "")),
+                "teacher_ids": teacher_ids,
+                "teacher_id": legacy_teacher_id,
                 "class": student.get("class", student.get("className", "")),
                 "grade": student.get("grade", student.get("schoolYear", "")),
                 "case_study_completed": bool(student.get("case_study_completed", False)),

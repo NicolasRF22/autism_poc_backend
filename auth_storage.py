@@ -8,7 +8,13 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from time_utils import now_brasilia_iso
 
 
-VALID_ROLES = {"admin", "editor", "viewer"}
+VALID_ROLES = {
+    "admin",
+    "secretaria",
+    "coordenacao",
+    "professor",
+    "viewer",
+}
 
 
 class AuthStorage:
@@ -63,7 +69,11 @@ class AuthStorage:
         return {
             "id": user["id"],
             "username": user["username"],
+            "name": user.get("name") or "",
             "role": user["role"],
+            "municipio_id": user.get("municipio_id") or "",
+            "school_id": user.get("school_id") or "",
+            "teacher_id": user.get("teacher_id") or "",
             "is_active": user.get("is_active", True),
             "created_at": user.get("created_at"),
             "updated_at": user.get("updated_at"),
@@ -94,23 +104,51 @@ class AuthStorage:
 
         return self._sanitize_user(user)
 
-    def create_user(self, username: str, password: str, role: str) -> Dict:
+    def create_user(
+        self,
+        username: str,
+        password: str,
+        role: str,
+        name: str = "",
+        municipio_id: str = "",
+        school_id: str = "",
+        teacher_id: str = "",
+    ) -> Dict:
         username = (username or "").strip()
+        role = (role or "").strip().lower()
         if len(username) < 3:
             raise ValueError("Nome de usuário deve ter ao menos 3 caracteres")
         if len(password or "") < 6:
             raise ValueError("Senha deve ter ao menos 6 caracteres")
         if role not in VALID_ROLES:
-            raise ValueError("Perfil inválido. Use: admin, editor ou viewer")
+            raise ValueError("Perfil inválido")
         if self._get_raw_user_by_username(username):
             raise ValueError("Nome de usuário já existe")
+
+        name = (name or "").strip()
+        municipio_id = (municipio_id or "").strip()
+        school_id = (school_id or "").strip()
+        teacher_id = (teacher_id or "").strip()
+
+        if role == "secretaria" and not municipio_id:
+            raise ValueError("Usuário secretaria exige municipio_id")
+        if role == "coordenacao" and not school_id:
+            raise ValueError("Usuário de coordenação exige school_id")
+        if role == "professor" and not school_id:
+            raise ValueError("Usuário professor exige school_id")
+        if role == "viewer" and not (municipio_id or school_id):
+            raise ValueError("Usuário viewer exige municipio_id ou school_id")
 
         now = now_brasilia_iso()
         user = {
             "id": str(uuid.uuid4()),
             "username": username,
             "password_hash": generate_password_hash(password),
+            "name": name,
             "role": role,
+            "municipio_id": municipio_id,
+            "school_id": school_id,
+            "teacher_id": teacher_id,
             "is_active": True,
             "created_at": now,
             "updated_at": now,
@@ -120,8 +158,9 @@ class AuthStorage:
         return self._sanitize_user(user)
 
     def update_user_role(self, user_id: str, role: str) -> Optional[Dict]:
+        role = (role or "").strip().lower()
         if role not in VALID_ROLES:
-            raise ValueError("Perfil inválido. Use: admin, editor ou viewer")
+            raise ValueError("Perfil inválido")
 
         user = self._get_raw_user_by_id(user_id)
         if not user:
@@ -131,3 +170,21 @@ class AuthStorage:
         user["updated_at"] = now_brasilia_iso()
         self._save_index()
         return self._sanitize_user(user)
+
+    def delete_user(self, user_id: str, acting_user_id: str = "") -> Optional[Dict]:
+        user = self._get_raw_user_by_id(user_id)
+        if not user:
+            return None
+
+        if acting_user_id and user_id == acting_user_id:
+            raise ValueError("Você não pode apagar o seu próprio usuário")
+
+        if user.get("role") == "admin":
+            admin_count = sum(1 for item in self._index if item.get("role") == "admin")
+            if admin_count <= 1:
+                raise ValueError("Não é possível apagar o último usuário admin")
+
+        sanitized_user = self._sanitize_user(user)
+        self._index = [item for item in self._index if item.get("id") != user_id]
+        self._save_index()
+        return sanitized_user

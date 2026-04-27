@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 import orjson
 import jwt
 from werkzeug.utils import secure_filename
@@ -36,6 +36,26 @@ def _normalize_student_name(value: str) -> str:
     normalized = unicodedata.normalize('NFKD', (value or '').strip().lower())
     normalized = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
     return ' '.join(normalized.split())
+
+
+def _normalize_municipio_id(value: str) -> str:
+    normalized = unicodedata.normalize('NFKD', (value or '').strip().lower())
+    normalized = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+    slug_chars = []
+    last_was_dash = False
+    for ch in normalized:
+        if ch.isalnum():
+            slug_chars.append(ch)
+            last_was_dash = False
+            continue
+        if not last_was_dash:
+            slug_chars.append('-')
+            last_was_dash = True
+
+    slug = ''.join(slug_chars).strip('-')
+    while '--' in slug:
+        slug = slug.replace('--', '-')
+    return slug
 
 
 def _name_tokens(value: str) -> List[str]:
@@ -65,6 +85,7 @@ from diary_storage import DiaryStorage
 from pdi_storage import PDIStorage
 from prompt_storage import PromptStorage
 from school_storage import SchoolStorage
+from municipality_storage import MunicipalityStorage
 from student_storage import StudentStorage
 from teacher_storage import TeacherStorage
 from auth_storage import AuthStorage, VALID_ROLES
@@ -82,16 +103,19 @@ os.makedirs(PROMPTS_FOLDER, exist_ok=True)
 _prompt_storage = PromptStorage(storage_dir=PROMPTS_FOLDER)
 
 SCHOOLS_FOLDER = os.path.join(os.path.dirname(__file__), 'schools')
+MUNICIPALITIES_FOLDER = os.path.join(os.path.dirname(__file__), 'municipalities')
 STUDENTS_FOLDER = os.path.join(os.path.dirname(__file__), 'students')
 USERS_FOLDER = os.path.join(os.path.dirname(__file__), 'users')
 AUDIT_FOLDER = os.path.join(os.path.dirname(__file__), 'audit_logs')
 TEACHERS_FOLDER = os.path.join(os.path.dirname(__file__), 'teachers')
 os.makedirs(SCHOOLS_FOLDER, exist_ok=True)
+os.makedirs(MUNICIPALITIES_FOLDER, exist_ok=True)
 os.makedirs(STUDENTS_FOLDER, exist_ok=True)
 os.makedirs(USERS_FOLDER, exist_ok=True)
 os.makedirs(AUDIT_FOLDER, exist_ok=True)
 os.makedirs(TEACHERS_FOLDER, exist_ok=True)
 _school_storage = SchoolStorage(storage_dir=SCHOOLS_FOLDER)
+_municipality_storage = MunicipalityStorage(storage_dir=MUNICIPALITIES_FOLDER)
 _student_storage = StudentStorage(storage_dir=STUDENTS_FOLDER)
 _teacher_storage = TeacherStorage(storage_dir=TEACHERS_FOLDER)
 _auth_storage = AuthStorage(
@@ -320,7 +344,6 @@ PUBLIC_API_PATHS = {
 ADMIN_ONLY_PREFIXES = (
     '/api/auth/users',
     '/api/audit',
-    '/api/teachers',
     '/api/admin',
 )
 
@@ -607,6 +630,8 @@ def get_pei_sources_preview():
         student = _get_student_record(student_id)
         if not student:
             return jsonify({"error": "Aluno não encontrado"}), 404
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
         student_name = _student_name_from_record(student)
         school = _student_school_from_record(student)
 
@@ -616,6 +641,11 @@ def get_pei_sources_preview():
     if not student:
         matches = _find_students_by_name(student_name)
         student = matches[0] if matches else None
+        if student and not _student_visible_to_user(student):
+            return _scope_forbidden()
+
+    if not student and not _student_name_visible_to_user(student_name):
+        return _scope_forbidden()
 
     teacher_records = []
     school_record = None
@@ -734,6 +764,17 @@ def _get_school_record(school_id: str):
     return _read_with_optional_fallback('school', _school_storage, 'get_school', school_id)
 
 
+def _get_municipality_record(municipio_id: str):
+    normalized_id = _normalize_municipio_id(municipio_id)
+    if not normalized_id:
+        return None
+    return _read_with_optional_fallback('municipality', _municipality_storage, 'get_municipality', normalized_id)
+
+
+def _list_all_municipalities():
+    return _read_with_optional_fallback('municipality', _municipality_storage, 'list_all_municipalities')
+
+
 def _get_teacher_record(teacher_id: str):
     return _read_with_optional_fallback('teacher', _teacher_storage, 'get_teacher', teacher_id)
 
@@ -829,6 +870,9 @@ def _build_token(user: Dict) -> str:
         'sub': user.get('id'),
         'username': user.get('username'),
         'role': user.get('role'),
+        'municipio_id': user.get('municipio_id') or '',
+        'school_id': user.get('school_id') or '',
+        'teacher_id': user.get('teacher_id') or '',
         'iat': int(now.timestamp()),
         'exp': int((now + timedelta(minutes=JWT_EXP_MINUTES)).timestamp()),
     }
@@ -841,10 +885,327 @@ def _sanitize_current_user(user: Dict) -> Dict:
         'username': user.get('username'),
         'name': user.get('name') or '',
         'role': user.get('role') or 'viewer',
+        'municipio_id': user.get('municipio_id') or '',
+        'school_id': user.get('school_id') or '',
+        'teacher_id': user.get('teacher_id') or '',
         'is_active': bool(user.get('is_active', True)),
         'created_at': user.get('created_at'),
         'updated_at': user.get('updated_at'),
     }
+
+
+ADMIN_ROLES = {'admin'}
+SECRETARIA_ROLES = {'secretaria'}
+SCHOOL_STAFF_ROLES = {'coordenacao'}
+PROFESSOR_ROLES = {'professor'}
+VIEWER_ROLES = {'viewer'}
+
+
+def _current_user() -> Dict:
+    return getattr(g, 'current_user', {}) or {}
+
+
+def _current_role() -> str:
+    return (_current_user().get('role') or '').strip().lower()
+
+
+def _is_global_user(user: Optional[Dict] = None) -> bool:
+    u = user or _current_user()
+    role = (u.get('role') or '').strip().lower()
+    return role in ADMIN_ROLES
+
+
+def _viewer_has_scope_to_school(user: Optional[Dict], school: Optional[Dict]) -> bool:
+    if not school:
+        return False
+
+    u = user or _current_user()
+    viewer_school_id = (u.get('school_id') or '').strip()
+    target_school_id = (school.get('id') or '').strip()
+    if viewer_school_id:
+        return viewer_school_id == target_school_id
+
+    viewer_municipio_id = (u.get('municipio_id') or '').strip()
+    if viewer_municipio_id:
+        return viewer_municipio_id == _school_municipio_id(school)
+
+    return False
+
+
+def _school_municipio_id(school: Dict) -> str:
+    if not isinstance(school, dict):
+        return ''
+    municipio_id = (school.get('municipio_id') or '').strip()
+    if municipio_id:
+        return municipio_id
+    return _extract_school_city(school)
+
+
+def _school_visible_to_user(school: Dict, user: Optional[Dict] = None) -> bool:
+    if not school:
+        return False
+    u = user or _current_user()
+    role = (u.get('role') or '').strip().lower()
+
+    if _is_global_user(u):
+        return True
+
+    if role in SECRETARIA_ROLES:
+        return (u.get('municipio_id') or '').strip() == _school_municipio_id(school)
+
+    if role in SCHOOL_STAFF_ROLES or role in PROFESSOR_ROLES:
+        return (u.get('school_id') or '').strip() == (school.get('id') or '').strip()
+
+    if role in VIEWER_ROLES:
+        return _viewer_has_scope_to_school(u, school)
+
+    return False
+
+
+def _get_professor_teacher_ids(user: Optional[Dict] = None) -> Set[str]:
+    u = user or _current_user()
+    ids: Set[str] = set()
+
+    direct_teacher_id = (u.get('teacher_id') or '').strip()
+    if direct_teacher_id:
+        ids.add(direct_teacher_id)
+
+    school_id = (u.get('school_id') or '').strip()
+    candidate_names = {
+        (u.get('name') or '').strip().lower(),
+        (u.get('username') or '').strip().lower(),
+    }
+    candidate_names = {value for value in candidate_names if value}
+    if not candidate_names:
+        return ids
+
+    teachers = _read_with_optional_fallback('teacher', _teacher_storage, 'list_all_teachers')
+    for teacher in teachers:
+        if school_id and (teacher.get('school_id') or '').strip() != school_id:
+            continue
+        teacher_name = (teacher.get('name') or '').strip().lower()
+        if teacher_name in candidate_names:
+            teacher_id = (teacher.get('id') or '').strip()
+            if teacher_id:
+                ids.add(teacher_id)
+
+    return ids
+
+
+def _student_visible_to_user(student: Dict, user: Optional[Dict] = None) -> bool:
+    if not student:
+        return False
+
+    u = user or _current_user()
+    role = (u.get('role') or '').strip().lower()
+
+    if _is_global_user(u):
+        return True
+
+    school_id = (student.get('school_id') or '').strip()
+    school = _get_school_record(school_id) if school_id else None
+
+    if role in SECRETARIA_ROLES or role in SCHOOL_STAFF_ROLES:
+        return _school_visible_to_user(school, u) if school else False
+
+    if role in PROFESSOR_ROLES:
+        professor_school_id = (u.get('school_id') or '').strip()
+        if professor_school_id and professor_school_id == school_id:
+            return True
+
+        teacher_ids = _get_professor_teacher_ids(u)
+        if not teacher_ids:
+            return False
+
+        linked_ids = student.get('teacher_ids') or []
+        if not isinstance(linked_ids, list):
+            linked_ids = []
+        linked_ids = {str(value).strip() for value in linked_ids if str(value).strip()}
+
+        legacy_teacher_id = (student.get('teacher_id') or '').strip()
+        if legacy_teacher_id:
+            linked_ids.add(legacy_teacher_id)
+
+        return bool(linked_ids.intersection(teacher_ids))
+
+    if role in VIEWER_ROLES:
+        return _school_visible_to_user(school, u) if school else False
+
+    return False
+
+
+def _teacher_visible_to_user(teacher: Dict, user: Optional[Dict] = None) -> bool:
+    if not teacher:
+        return False
+
+    u = user or _current_user()
+    role = (u.get('role') or '').strip().lower()
+    if _is_global_user(u):
+        return True
+
+    school_id = (teacher.get('school_id') or '').strip()
+    school = _get_school_record(school_id) if school_id else None
+
+    if role in SECRETARIA_ROLES or role in SCHOOL_STAFF_ROLES:
+        return _school_visible_to_user(school, u) if school else False
+
+    if role in PROFESSOR_ROLES:
+        teacher_ids = _get_professor_teacher_ids(u)
+        return (teacher.get('id') or '').strip() in teacher_ids
+
+    if role in VIEWER_ROLES:
+        return _school_visible_to_user(school, u) if school else False
+
+    return False
+
+
+def _scope_forbidden(message: str = 'Acesso negado para este escopo'):
+    return jsonify({'error': message}), 403
+
+
+def _can_manage_pre_registration(role: str) -> bool:
+    return role in ADMIN_ROLES or role in SECRETARIA_ROLES
+
+
+def _can_edit_school_registration(role: str) -> bool:
+    return role in ADMIN_ROLES or role in SECRETARIA_ROLES or role in SCHOOL_STAFF_ROLES
+
+
+def _can_submit_school_registration_form(role: str) -> bool:
+    return role in ADMIN_ROLES or role in SCHOOL_STAFF_ROLES
+
+
+def _can_manage_student_teacher_links(role: str) -> bool:
+    return role in ADMIN_ROLES or role in SCHOOL_STAFF_ROLES
+
+
+def _can_edit_learning_records(role: str) -> bool:
+    return role in ADMIN_ROLES or role in PROFESSOR_ROLES
+
+
+def _filter_schools_by_scope(schools: List[Dict], user: Optional[Dict] = None) -> List[Dict]:
+    u = user or _current_user()
+    return [school for school in schools if _school_visible_to_user(school, u)]
+
+
+def _filter_students_by_scope(students: List[Dict], user: Optional[Dict] = None) -> List[Dict]:
+    u = user or _current_user()
+    return [student for student in students if _student_visible_to_user(student, u)]
+
+
+def _filter_teachers_by_scope(teachers: List[Dict], user: Optional[Dict] = None) -> List[Dict]:
+    u = user or _current_user()
+    return [teacher for teacher in teachers if _teacher_visible_to_user(teacher, u)]
+
+
+def _submission_visible_to_user(submission: Dict, user: Optional[Dict] = None) -> bool:
+    if _is_global_user(user):
+        return True
+
+    form_id = (submission.get('form_id') or '').strip()
+    metadata = submission.get('metadata') or {}
+    pre_registration_id = str(metadata.get('pre_registration_id') or '').strip()
+
+    if not pre_registration_id:
+        return False
+
+    if form_id == 'cadastro_escola':
+        school = _get_school_record(pre_registration_id)
+        return _school_visible_to_user(school, user)
+
+    if form_id == 'cadastro_aluno':
+        student = _get_student_record(pre_registration_id)
+        return _student_visible_to_user(student, user)
+
+    return False
+
+
+def _student_name_visible_to_user(student_name: str, user: Optional[Dict] = None) -> bool:
+    candidate_name = (student_name or '').strip()
+    if not candidate_name:
+        return False
+    matches = _find_students_by_name(candidate_name)
+    if not matches:
+        return False
+    return any(_student_visible_to_user(student, user) for student in matches)
+
+
+def _chat_history_repo():
+    if not _is_postgres_available():
+        return None
+    return _postgres_repositories.get('chat_history')
+
+
+def _extract_school_city(school_record: Dict) -> str:
+    if not isinstance(school_record, dict):
+        return ''
+    address = school_record.get('address') or {}
+    if isinstance(address, dict):
+        return (address.get('city') or '').strip()
+    return ''
+
+
+def _resolve_chat_scope(student_id: str, student_name: str, school_id: str, school_name: str) -> Dict:
+    resolved_student_id = (student_id or '').strip()
+    resolved_student_name = (student_name or '').strip()
+    resolved_school_id = (school_id or '').strip()
+    resolved_school_name = (school_name or '').strip()
+    municipio_id = ''
+
+    student = _get_student_record(resolved_student_id) if resolved_student_id else None
+    if student:
+        resolved_student_name = (student.get('name') or student.get('studentName') or resolved_student_name).strip()
+        if not resolved_school_id:
+            resolved_school_id = (student.get('school_id') or '').strip()
+
+    school = _get_school_record(resolved_school_id) if resolved_school_id else None
+    if school:
+        resolved_school_name = (school.get('name') or resolved_school_name).strip()
+        municipio_id = (school.get('municipio_id') or _extract_school_city(school)).strip()
+
+    return {
+        'student_id': resolved_student_id,
+        'student_name': resolved_student_name,
+        'school_id': resolved_school_id,
+        'school_name': resolved_school_name,
+        'municipio_id': municipio_id,
+    }
+
+
+def _can_access_chat_session(session_data: Dict, user: Dict) -> bool:
+    role = (user.get('role') or '').strip().lower()
+    if role in ADMIN_ROLES:
+        return True
+
+    if role in SECRETARIA_ROLES:
+        return (
+            (user.get('municipio_id') or '').strip()
+            and (user.get('municipio_id') or '').strip() == (session_data.get('municipio_id') or '').strip()
+        )
+
+    if role in SCHOOL_STAFF_ROLES:
+        return (
+            (user.get('school_id') or '').strip()
+            and (user.get('school_id') or '').strip() == (session_data.get('school_id') or '').strip()
+        )
+
+    if role in PROFESSOR_ROLES:
+        return (user.get('id') or '').strip() == (session_data.get('created_by_user_id') or '').strip()
+
+    if role in VIEWER_ROLES:
+        viewer_school_id = (user.get('school_id') or '').strip()
+        viewer_municipio_id = (user.get('municipio_id') or '').strip()
+        if viewer_school_id:
+            return viewer_school_id == (session_data.get('school_id') or '').strip()
+        if viewer_municipio_id:
+            return viewer_municipio_id == (session_data.get('municipio_id') or '').strip()
+        return False
+
+    return False
+
+
+def _filter_chat_sessions_by_scope(sessions: List[Dict], user: Dict) -> List[Dict]:
+    return [session for session in sessions if _can_access_chat_session(session, user)]
 
 
 def _is_admin_only_path(path: str) -> bool:
@@ -930,18 +1291,24 @@ def _get_submissions_from_file() -> List[Dict]:
     return list(submissions)
 
 
-def _get_submissions_form_counts() -> Dict[str, int]:
+def _list_all_submissions_raw() -> List[Dict]:
     if _read_from_postgres_first():
-        counts = _postgres_repositories['form_submission'].get_form_counts()
-        if _is_dual_mode() and not any(counts.values()):
-            counts = {
-                form_id: len([s for s in submissions if s.get('form_id') == form_id])
-                for form_id in FORMS.keys()
-            }
-        return counts
+        data = _postgres_repositories['form_submission'].list_all_submissions()
+        if _is_dual_mode() and not data:
+            data = _get_submissions_from_file()
+        return data
+    return _get_submissions_from_file()
 
+
+def _list_visible_submissions() -> List[Dict]:
+    all_submissions = _list_all_submissions_raw()
+    return [item for item in all_submissions if _submission_visible_to_user(item)]
+
+
+def _get_submissions_form_counts() -> Dict[str, int]:
+    visible_submissions = _list_visible_submissions()
     return {
-        form_id: len([s for s in submissions if s.get('form_id') == form_id])
+        form_id: len([s for s in visible_submissions if s.get('form_id') == form_id])
         for form_id in FORMS.keys()
     }
 
@@ -1022,9 +1389,30 @@ def submit_form():
     if not form:
         return jsonify({"error": "form_id inválido"}), 400
 
+    role = _current_role()
+    if form_id == 'cadastro_escola' and not _can_submit_school_registration_form(role):
+        return _scope_forbidden('Somente admin ou coordenação podem enviar cadastro da escola')
+    if form_id == 'cadastro_aluno' and not _can_edit_learning_records(role):
+        return _scope_forbidden('Somente admin ou professor podem enviar estudo de caso')
+
     submitted_at = now_brasilia_iso()
     metadata = data.get('metadata', {}) or {}
     pre_registration_id = metadata.get('pre_registration_id')
+
+    if pre_registration_id:
+        pre_registration_id = str(pre_registration_id).strip()
+        if form_id == 'cadastro_escola':
+            school = _get_school_record(pre_registration_id)
+            if not school:
+                return jsonify({"error": "Pré-cadastro de escola não encontrado"}), 404
+            if not _school_visible_to_user(school):
+                return _scope_forbidden()
+        elif form_id == 'cadastro_aluno':
+            student = _get_student_record(pre_registration_id)
+            if not student:
+                return jsonify({"error": "Pré-cadastro de aluno não encontrado"}), 404
+            if not _student_visible_to_user(student):
+                return _scope_forbidden()
 
     if _is_postgres_mode():
         submission_id = None
@@ -1084,6 +1472,19 @@ def submit_form():
                 submission_id=dual_submission_id or str(submission['id']),
                 submitted_at=submitted_at,
             )
+
+    if form_id == 'cadastro_aluno' and pre_registration_id:
+        student_updates = {'case_study_completed': True}
+        if _is_postgres_mode():
+            updated_student = _postgres_repositories['student'].update_student(str(pre_registration_id), student_updates)
+            if not updated_student:
+                return jsonify({"error": "Pré-cadastro de aluno não encontrado"}), 404
+        else:
+            updated_student = _student_storage.update_student(str(pre_registration_id), student_updates)
+            if not updated_student:
+                return jsonify({"error": "Pré-cadastro de aluno não encontrado"}), 404
+            if _is_dual_mode():
+                _postgres_repositories['student'].update_student(str(pre_registration_id), student_updates)
     
     return jsonify({
         "message": "Formulário submetido com sucesso",
@@ -1093,13 +1494,7 @@ def submit_form():
 @app.route('/api/submissions', methods=['GET'])
 def get_submissions():
     """Retorna todas as submissões"""
-    if _read_from_postgres_first():
-        data = _postgres_repositories['form_submission'].list_all_submissions()
-        if _is_dual_mode() and not data:
-            data = _get_submissions_from_file()
-        return jsonify(data)
-
-    return jsonify(_get_submissions_from_file())
+    return jsonify(_list_visible_submissions())
 
 @app.route('/api/submissions/<submission_id>', methods=['GET'])
 def get_submission(submission_id):
@@ -1113,6 +1508,8 @@ def get_submission(submission_id):
 
     if not submission:
         return jsonify({"error": "Submissão não encontrada"}), 404
+    if not _submission_visible_to_user(submission):
+        return _scope_forbidden()
     return jsonify(submission)
 
 @app.route('/api/submissions/<submission_id>/download', methods=['GET'])
@@ -1127,6 +1524,8 @@ def download_submission(submission_id):
 
     if not submission:
         return jsonify({"error": "Submissão não encontrada"}), 404
+    if not _submission_visible_to_user(submission):
+        return _scope_forbidden()
     
     # Cria arquivo JSON temporário
     filename = f"submission_{submission_id}_{submission['form_id']}.json"
@@ -1140,12 +1539,7 @@ def download_submission(submission_id):
 @app.route('/api/submissions/download-all', methods=['GET'])
 def download_all_submissions():
     """Baixa todas as submissões em formato JSON"""
-    if _read_from_postgres_first():
-        all_submissions = _postgres_repositories['form_submission'].list_all_submissions()
-        if _is_dual_mode() and not all_submissions:
-            all_submissions = _get_submissions_from_file()
-    else:
-        all_submissions = _get_submissions_from_file()
+    all_submissions = _list_visible_submissions()
 
     if not all_submissions:
         return jsonify({"error": "Nenhuma submissão encontrada"}), 404
@@ -1163,9 +1557,15 @@ def download_all_submissions():
 def delete_case_study_form(student_id):
     """Remove o formulário de estudo de caso sem remover o pré-cadastro do aluno."""
     try:
+        role = _current_role()
+        if not _can_edit_learning_records(role):
+            return _scope_forbidden('Somente admin ou professor podem remover estudo de caso')
+
         student = _get_student_record(student_id)
         if not student:
             return jsonify({"error": "Aluno não encontrado"}), 404
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
 
         updates = {'case_study_completed': False}
 
@@ -1186,9 +1586,15 @@ def delete_case_study_form(student_id):
 def delete_school_registration_form(school_id):
     """Remove o formulário de cadastro da escola sem remover o pré-cadastro da escola."""
     try:
+        role = _current_role()
+        if not _can_submit_school_registration_form(role):
+            return _scope_forbidden('Somente admin ou coordenação podem remover cadastro da escola')
+
         school = _get_school_record(school_id)
         if not school:
             return jsonify({"error": "Escola não encontrada"}), 404
+        if not _school_visible_to_user(school):
+            return _scope_forbidden()
 
         updates = {'school_registration_completed': False}
 
@@ -1287,12 +1693,43 @@ def create_user():
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
     role = (data.get('role') or '').strip().lower()
+    name = (data.get('name') or '').strip()
+    municipio_id = (data.get('municipio_id') or '').strip()
+    school_id = (data.get('school_id') or '').strip()
+    teacher_id = (data.get('teacher_id') or '').strip()
 
     if role not in VALID_ROLES:
-        return jsonify({'error': 'Perfil inválido. Use admin, editor ou viewer'}), 400
+        return jsonify({'error': 'Perfil inválido'}), 400
+
+    municipio_id = _normalize_municipio_id(municipio_id)
+    if municipio_id and not _get_municipality_record(municipio_id):
+        return jsonify({'error': 'Municipio inválido'}), 400
+
+    if role in {'secretaria', 'coordenacao', 'professor'} and not municipio_id:
+        return jsonify({'error': f'Usuário {role} exige municipio_id'}), 400
+
+    if role in {'coordenacao', 'professor'}:
+        if not school_id:
+            return jsonify({'error': f'Usuário {role} exige school_id'}), 400
+
+        school = _get_school_record(school_id)
+        if not school:
+            return jsonify({'error': 'Escola selecionada não foi encontrada'}), 400
+
+        school_municipio_id = _normalize_municipio_id(_school_municipio_id(school))
+        if municipio_id and school_municipio_id and municipio_id != school_municipio_id:
+            return jsonify({'error': 'A escola selecionada não pertence ao município informado'}), 400
 
     try:
-        user = _auth_storage.create_user(username=username, password=password, role=role)
+        user = _auth_storage.create_user(
+            username=username,
+            password=password,
+            role=role,
+            name=name,
+            municipio_id=municipio_id,
+            school_id=school_id,
+            teacher_id=teacher_id,
+        )
         return jsonify({'message': 'Usuário criado com sucesso', 'user': user}), 201
     except ValueError as err:
         return jsonify({'error': str(err)}), 400
@@ -1305,13 +1742,28 @@ def update_user_role(user_id):
     role = (data.get('role') or '').strip().lower()
 
     if role not in VALID_ROLES:
-        return jsonify({'error': 'Perfil inválido. Use admin, editor ou viewer'}), 400
+        return jsonify({'error': 'Perfil inválido'}), 400
 
     try:
         user = _auth_storage.update_user_role(user_id=user_id, role=role)
         if not user:
             return jsonify({'error': 'Usuário não encontrado'}), 404
         return jsonify({'message': 'Perfil atualizado com sucesso', 'user': user})
+    except ValueError as err:
+        return jsonify({'error': str(err)}), 400
+
+
+@app.route('/api/auth/users/<user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    """Remove usuário existente (admin)."""
+    try:
+        deleted_user = _auth_storage.delete_user(
+            user_id=user_id,
+            acting_user_id=(g.current_user or {}).get('id', ''),
+        )
+        if not deleted_user:
+            return jsonify({'error': 'Usuário não encontrado'}), 404
+        return jsonify({'message': 'Usuário apagado com sucesso', 'user': deleted_user})
     except ValueError as err:
         return jsonify({'error': str(err)}), 400
 
@@ -1357,6 +1809,60 @@ def get_model_usage():
     return jsonify(payload)
 
 
+@app.route('/api/municipalities', methods=['GET'])
+def list_municipalities():
+    """Lista municípios cadastrados."""
+    try:
+        return jsonify(_list_all_municipalities())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/municipalities', methods=['POST'])
+def create_municipality():
+    """Cria um município (apenas admin)."""
+    if _current_role() not in ADMIN_ROLES:
+        return jsonify({'error': 'Apenas admin pode criar municípios'}), 403
+
+    data = request.json or {}
+    name = str(data.get('name') or '').strip()
+    municipio_id = _normalize_municipio_id(data.get('id') or data.get('municipio_id') or name)
+
+    if not name:
+        return jsonify({'error': 'Nome do município é obrigatório'}), 400
+    if not municipio_id:
+        return jsonify({'error': 'municipio_id inválido'}), 400
+    if _get_municipality_record(municipio_id):
+        return jsonify({'error': 'Municipio já existe'}), 400
+
+    try:
+        if _is_postgres_mode():
+            municipality = _postgres_repositories['municipality'].create_municipality(
+                municipio_id=municipio_id,
+                name=name,
+            )
+            return jsonify({'message': 'Município criado com sucesso', 'municipality': municipality}), 201
+
+        municipality = _municipality_storage.create_municipality(
+            municipio_id=municipio_id,
+            name=name,
+        )
+
+        if _is_dual_mode():
+            _postgres_repositories['municipality'].create_municipality(
+                municipio_id=municipality.get('id'),
+                name=municipality.get('name', ''),
+                created_at=municipality.get('created_at'),
+                updated_at=municipality.get('updated_at'),
+            )
+
+        return jsonify({'message': 'Município criado com sucesso', 'municipality': municipality}), 201
+    except ValueError as err:
+        return jsonify({'error': str(err)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================================================================
 # DIARY ROUTES
 # ==================================================================
@@ -1367,7 +1873,18 @@ def get_diary_students():
     try:
         _sync_legacy_diary_links()
         summaries = _read_with_optional_fallback('diary', _diary_storage, 'list_all_summaries')
-        return jsonify(summaries)
+        filtered = []
+        for summary in summaries:
+            student_id = (summary.get('student_id') or '').strip()
+            if student_id:
+                student = _get_student_record(student_id)
+                if student and _student_visible_to_user(student):
+                    filtered.append(summary)
+                continue
+            if _student_name_visible_to_user(summary.get('student_name') or ''):
+                filtered.append(summary)
+
+        return jsonify(filtered)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1385,26 +1902,17 @@ def get_available_diary_students():
             for summary in diary_summaries
             if (summary.get('student_id') or '').strip()
         }
-        used_student_names = {
-            _normalize_student_name(summary.get('student_name') or '')
-            for summary in diary_summaries
-            if summary.get('student_name')
-        }
 
         available_students = []
         for student in students:
             student_id = (student.get('id') or '').strip()
-            student_name = student.get('name') or ''
-            normalized_name = _normalize_student_name(student_name)
 
             if student_id and student_id in used_student_ids:
-                continue
-            if normalized_name in used_student_names:
                 continue
 
             available_students.append(student)
 
-        return jsonify(available_students)
+        return jsonify(_filter_students_by_scope(available_students))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1413,8 +1921,28 @@ def get_available_diary_students():
 def get_student_entries(student_name):
     """Retorna todas as entradas de diário de um aluno específico"""
     try:
+        student_id = (request.args.get('student_id') or '').strip()
+        if student_id:
+            student = _get_student_record(student_id)
+            if not student:
+                return jsonify({"error": "Aluno não encontrado"}), 404
+            if not _student_visible_to_user(student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(student_name):
+            return _scope_forbidden()
+
         entries = _read_with_optional_fallback('diary', _diary_storage, 'get_entries_by_student', student_name)
-        return jsonify(entries)
+        visible_entries = []
+        for entry in entries:
+            entry_student_id = (entry.get('student_id') or '').strip()
+            if entry_student_id:
+                student = _get_student_record(entry_student_id)
+                if student and _student_visible_to_user(student):
+                    visible_entries.append(entry)
+                continue
+            if _student_name_visible_to_user(entry.get('student_name') or ''):
+                visible_entries.append(entry)
+        return jsonify(visible_entries)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1423,7 +1951,19 @@ def get_student_entries(student_name):
 def delete_student_diary(student_name):
     """Remove todas as entradas de diário de um aluno."""
     try:
+        if not _can_edit_learning_records(_current_role()):
+            return _scope_forbidden('Somente admin ou professor podem remover diário')
+
         student_id = (request.args.get('student_id') or '').strip() or None
+        if student_id:
+            student = _get_student_record(student_id)
+            if not student:
+                return jsonify({"error": "Aluno não encontrado"}), 404
+            if not _student_visible_to_user(student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(student_name):
+            return _scope_forbidden()
+
         if _is_postgres_mode():
             removed_count = _postgres_repositories['diary'].delete_entries_by_student(student_name, student_id=student_id)
         else:
@@ -1446,6 +1986,9 @@ def delete_student_diary(student_name):
 def create_diary_entry():
     """Cria uma nova entrada de diário"""
     data = request.json or {}
+
+    if not _can_edit_learning_records(_current_role()):
+        return _scope_forbidden('Somente admin ou professor podem criar diário')
     
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
@@ -1463,6 +2006,8 @@ def create_diary_entry():
         student = _get_student_record(student_id)
         if not student:
             return jsonify({"error": "Aluno selecionado não foi encontrado"}), 400
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
 
         student_name = student.get('name') or student.get('studentName') or data.get('student_name') or ''
         if not student_name:
@@ -1551,6 +2096,15 @@ def get_diary_entry(entry_id):
         entry = _read_with_optional_fallback('diary', _diary_storage, 'get_entry', entry_id)
         if not entry:
             return jsonify({"error": "Entrada não encontrada"}), 404
+
+        entry_student_id = (entry.get('student_id') or '').strip()
+        if entry_student_id:
+            student = _get_student_record(entry_student_id)
+            if not student or not _student_visible_to_user(student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(entry.get('student_name') or ''):
+            return _scope_forbidden()
+
         return jsonify(entry)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1560,6 +2114,8 @@ def get_diary_entry(entry_id):
 def update_diary_entry(entry_id):
     """Atualiza uma entrada existente de diário"""
     data = request.json or {}
+    if not _can_edit_learning_records(_current_role()):
+        return _scope_forbidden('Somente admin ou professor podem editar diário')
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
 
@@ -1568,11 +2124,21 @@ def update_diary_entry(entry_id):
         if not existing_entry:
             return jsonify({"error": "Entrada não encontrada"}), 404
 
+        existing_student_id = (existing_entry.get('student_id') or '').strip()
+        if existing_student_id:
+            existing_student = _get_student_record(existing_student_id)
+            if not existing_student or not _student_visible_to_user(existing_student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(existing_entry.get('student_name') or ''):
+            return _scope_forbidden()
+
         student_id = (data.get('student_id') or existing_entry.get('student_id') or '').strip() or None
         if student_id:
             student = _get_student_record(student_id)
             if not student:
                 return jsonify({"error": "Aluno selecionado não foi encontrado"}), 400
+            if not _student_visible_to_user(student):
+                return _scope_forbidden()
             student_name = student.get('name') or student.get('studentName') or existing_entry.get('student_name') or ''
         else:
             student_name = data.get('student_name') or existing_entry.get('student_name') or ''
@@ -1661,6 +2227,21 @@ def update_diary_entry(entry_id):
 def delete_diary_entry(entry_id):
     """Remove uma entrada de diário"""
     try:
+        if not _can_edit_learning_records(_current_role()):
+            return _scope_forbidden('Somente admin ou professor podem remover diário')
+
+        entry = _read_with_optional_fallback('diary', _diary_storage, 'get_entry', entry_id)
+        if not entry:
+            return jsonify({"error": "Entrada não encontrada"}), 404
+
+        entry_student_id = (entry.get('student_id') or '').strip()
+        if entry_student_id:
+            student = _get_student_record(entry_student_id)
+            if not student or not _student_visible_to_user(student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(entry.get('student_name') or ''):
+            return _scope_forbidden()
+
         if _is_postgres_mode():
             deleted = _postgres_repositories['diary'].delete_entry(entry_id)
         else:
@@ -1668,9 +2249,7 @@ def delete_diary_entry(entry_id):
             if _is_dual_mode() and deleted:
                 _postgres_repositories['diary'].delete_entry(entry_id)
 
-        if deleted:
-            return jsonify({"message": "Entrada removida com sucesso"})
-        return jsonify({"error": "Entrada não encontrada"}), 404
+        return jsonify({"message": "Entrada removida com sucesso"}) if deleted else jsonify({"error": "Entrada não encontrada"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1680,6 +2259,15 @@ def get_last_teachers(student_name):
     """Retorna os professores da última entrada de um aluno (para usar como padrão)"""
     try:
         student_id = (request.args.get('student_id') or '').strip() or None
+        if student_id:
+            student = _get_student_record(student_id)
+            if not student:
+                return jsonify({"error": "Aluno não encontrado"}), 404
+            if not _student_visible_to_user(student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(student_name):
+            return _scope_forbidden()
+
         teachers = _read_with_optional_fallback('diary', _diary_storage, 'get_last_teachers', student_name, student_id=student_id)
         return jsonify({"teachers": teachers})
     except Exception as e:
@@ -1738,6 +2326,15 @@ def preview_diary_import():
     try:
         preferred_student_id = (request.form.get('student_id') or '').strip()
         preferred_student_name = (request.form.get('student_name') or '').strip()
+        if preferred_student_id:
+            preferred_student = _get_student_record(preferred_student_id)
+            if not preferred_student:
+                return jsonify({'error': 'Aluno informado não encontrado'}), 404
+            if not _student_visible_to_user(preferred_student):
+                return _scope_forbidden()
+        elif preferred_student_name and not _student_name_visible_to_user(preferred_student_name):
+            return _scope_forbidden()
+
         use_ocr_raw = (request.form.get('use_ocr') or 'true').strip().lower()
         use_ocr = use_ocr_raw in {'1', 'true', 'yes', 'y'}
         ocr_lang = (request.form.get('ocr_lang') or 'por').strip() or 'por'
@@ -1818,6 +2415,9 @@ def preview_diary_import():
 @app.route('/api/diary/import/commit', methods=['POST'])
 def commit_diary_import():
     """Persiste entradas revisadas do preview de importação."""
+    if not _can_edit_learning_records(_current_role()):
+        return _scope_forbidden('Somente admin ou professor podem importar diário')
+
     data = request.json or {}
     entries = data.get('entries') or []
     if not isinstance(entries, list) or not entries:
@@ -1831,6 +2431,13 @@ def commit_diary_import():
             student_name = (entry.get('student_name') or '').strip()
 
             resolved_student_id, resolved_student_name, resolve_warnings = _resolve_student(student_id, student_name)
+            if resolved_student_id:
+                resolved_student = _get_student_record(resolved_student_id)
+                if not resolved_student or not _student_visible_to_user(resolved_student):
+                    return _scope_forbidden()
+            elif resolved_student_name and not _student_name_visible_to_user(resolved_student_name):
+                return _scope_forbidden()
+
             parse_warnings = list(entry.get('parse_warnings') or [])
             parse_warnings.extend(resolve_warnings)
 
@@ -1921,7 +2528,17 @@ def get_all_pdis():
     try:
         _sync_legacy_pdi_links()
         pdis = _read_with_optional_fallback('pdi', _pdi_storage, 'list_all_pdis')
-        return jsonify(pdis)
+        filtered = []
+        for pdi in pdis:
+            student_id = (pdi.get('student_id') or '').strip()
+            if student_id:
+                student = _get_student_record(student_id)
+                if student and _student_visible_to_user(student):
+                    filtered.append(pdi)
+                continue
+            if _student_name_visible_to_user(pdi.get('student_name') or ''):
+                filtered.append(pdi)
+        return jsonify(filtered)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1958,7 +2575,7 @@ def get_available_pdi_students():
 
             available_students.append(student)
 
-        return jsonify(available_students)
+        return jsonify(_filter_students_by_scope(available_students))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1969,6 +2586,15 @@ def get_pdi_by_student(student_name):
     try:
         _sync_legacy_pdi_links()
         student_id = (request.args.get('student_id') or '').strip() or None
+        if student_id:
+            student = _get_student_record(student_id)
+            if not student:
+                return jsonify({"error": "Aluno não encontrado"}), 404
+            if not _student_visible_to_user(student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(student_name):
+            return _scope_forbidden()
+
         pdi = _read_with_optional_fallback('pdi', _pdi_storage, 'get_pdi_by_student', student_name, student_id=student_id)
         if not pdi:
             return jsonify({"error": "PDI não encontrado para este aluno"}), 404
@@ -1985,6 +2611,15 @@ def get_pdi_by_id(pdi_id):
         pdi = _read_with_optional_fallback('pdi', _pdi_storage, 'get_pdi', pdi_id)
         if not pdi:
             return jsonify({"error": "PDI não encontrado"}), 404
+
+        student_id = (pdi.get('student_id') or '').strip()
+        if student_id:
+            student = _get_student_record(student_id)
+            if not student or not _student_visible_to_user(student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(pdi.get('student_name') or ''):
+            return _scope_forbidden()
+
         return jsonify(pdi)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1994,6 +2629,9 @@ def get_pdi_by_id(pdi_id):
 def create_pdi():
     """Cria um novo PDI"""
     data = request.json
+
+    if not _can_edit_learning_records(_current_role()):
+        return _scope_forbidden('Somente admin ou professor podem criar PDI')
     
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
@@ -2019,6 +2657,8 @@ def create_pdi():
         student = _get_student_record(student_id)
         if not student:
             return jsonify({"error": "Aluno selecionado não foi encontrado"}), 400
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
 
         student_name = student.get('name') or student.get('studentName') or data.get('student_name') or ''
         if not student_name:
@@ -2089,6 +2729,9 @@ def create_pdi():
 def update_pdi(pdi_id):
     """Atualiza um PDI existente"""
     data = request.json
+
+    if not _can_edit_learning_records(_current_role()):
+        return _scope_forbidden('Somente admin ou professor podem editar PDI')
     
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
@@ -2111,6 +2754,14 @@ def update_pdi(pdi_id):
         if not existing_pdi:
             return jsonify({"error": "PDI não encontrado"}), 404
 
+        existing_student_id = (existing_pdi.get('student_id') or '').strip()
+        if existing_student_id:
+            existing_student = _get_student_record(existing_student_id)
+            if not existing_student or not _student_visible_to_user(existing_student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(existing_pdi.get('student_name') or ''):
+            return _scope_forbidden()
+
         student_id = (data.get('student_id') or '').strip()
         if not student_id:
             return jsonify({"error": "student_id é obrigatório para atualizar PDI"}), 400
@@ -2118,6 +2769,8 @@ def update_pdi(pdi_id):
         student = _get_student_record(student_id)
         if not student:
             return jsonify({"error": "Aluno selecionado não foi encontrado"}), 400
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
 
         student_name = student.get('name') or student.get('studentName') or data.get('student_name') or ''
         if not student_name:
@@ -2183,6 +2836,21 @@ def update_pdi(pdi_id):
 def delete_pdi(pdi_id):
     """Remove um PDI"""
     try:
+        if not _can_edit_learning_records(_current_role()):
+            return _scope_forbidden('Somente admin ou professor podem remover PDI')
+
+        existing_pdi = _read_with_optional_fallback('pdi', _pdi_storage, 'get_pdi', pdi_id)
+        if not existing_pdi:
+            return jsonify({"error": "PDI não encontrado"}), 404
+
+        student_id = (existing_pdi.get('student_id') or '').strip()
+        if student_id:
+            student = _get_student_record(student_id)
+            if not student or not _student_visible_to_user(student):
+                return _scope_forbidden()
+        elif not _student_name_visible_to_user(existing_pdi.get('student_name') or ''):
+            return _scope_forbidden()
+
         if _is_postgres_mode():
             deleted = _postgres_repositories['pdi'].delete_pdi(pdi_id)
         else:
@@ -2190,9 +2858,7 @@ def delete_pdi(pdi_id):
             if _is_dual_mode() and deleted:
                 _postgres_repositories['pdi'].delete_pdi(pdi_id)
 
-        if deleted:
-            return jsonify({"message": "PDI removido com sucesso"})
-        return jsonify({"error": "PDI não encontrado"}), 404
+        return jsonify({"message": "PDI removido com sucesso"}) if deleted else jsonify({"error": "PDI não encontrado"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2208,9 +2874,9 @@ def get_all_schools():
         if _read_from_postgres_first():
             schools_pg = _postgres_repositories['school'].list_all_schools()
             if schools_pg or _is_postgres_mode():
-                return jsonify(schools_pg)
+                return jsonify(_filter_schools_by_scope(schools_pg))
         schools = _school_storage.list_all_schools()
-        return jsonify(schools)
+        return jsonify(_filter_schools_by_scope(schools))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2224,11 +2890,15 @@ def get_school(school_id):
             if school_pg or _is_postgres_mode():
                 if not school_pg:
                     return jsonify({"error": "Escola não encontrada"}), 404
+                if not _school_visible_to_user(school_pg):
+                    return _scope_forbidden()
                 return jsonify(school_pg)
 
         school = _school_storage.get_school(school_id)
         if not school:
             return jsonify({"error": "Escola não encontrada"}), 404
+        if not _school_visible_to_user(school):
+            return _scope_forbidden()
         return jsonify(school)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2241,6 +2911,22 @@ def create_school():
     
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
+
+    role = _current_role()
+    if not _can_manage_pre_registration(role):
+        return _scope_forbidden('Apenas admin ou secretaria podem criar escolas')
+
+    municipio_id = _normalize_municipio_id(data.get('municipio_id') or '')
+    if not municipio_id:
+        return jsonify({'error': 'municipio_id é obrigatório para cadastrar escola'}), 400
+    if not _get_municipality_record(municipio_id):
+        return jsonify({'error': 'Municipio inválido'}), 400
+    data['municipio_id'] = municipio_id
+
+    if role in SECRETARIA_ROLES:
+        current_user_municipio = _normalize_municipio_id((_current_user().get('municipio_id') or '').strip())
+        if municipio_id != current_user_municipio:
+            return _scope_forbidden('Secretaria só pode cadastrar escolas do próprio município')
     
     try:
         if _is_postgres_mode():
@@ -2275,6 +2961,30 @@ def update_school(school_id):
     
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
+
+    role = _current_role()
+    if not _can_edit_school_registration(role):
+        return _scope_forbidden('Perfil sem permissão para editar escolas')
+
+    current_school = _get_school_record(school_id)
+    if not current_school:
+        return jsonify({"error": "Escola não encontrada"}), 404
+    if not _school_visible_to_user(current_school):
+        return _scope_forbidden()
+
+    if role in SECRETARIA_ROLES:
+        target_municipio = _normalize_municipio_id(data.get('municipio_id') or _school_municipio_id(current_school))
+        current_user_municipio = _normalize_municipio_id((_current_user().get('municipio_id') or '').strip())
+        if target_municipio != current_user_municipio:
+            return _scope_forbidden('Secretaria só pode editar escolas do próprio município')
+
+    if 'municipio_id' in data:
+        normalized_municipio_id = _normalize_municipio_id(data.get('municipio_id') or '')
+        if not normalized_municipio_id:
+            return jsonify({'error': 'municipio_id inválido'}), 400
+        if not _get_municipality_record(normalized_municipio_id):
+            return jsonify({'error': 'Municipio inválido'}), 400
+        data['municipio_id'] = normalized_municipio_id
     
     try:
         if _is_postgres_mode():
@@ -2308,6 +3018,16 @@ def update_school(school_id):
 def delete_school(school_id):
     """Remove um cadastro de escola"""
     try:
+        role = _current_role()
+        if role in SCHOOL_STAFF_ROLES or role in PROFESSOR_ROLES or role in VIEWER_ROLES:
+            return _scope_forbidden('Perfil sem permissão para remover escolas')
+
+        school = _get_school_record(school_id)
+        if not school:
+            return jsonify({"error": "Escola não encontrada"}), 404
+        if not _school_visible_to_user(school):
+            return _scope_forbidden()
+
         if _is_postgres_mode():
             if _postgres_repositories['school'].delete_school(school_id):
                 _delete_form_links_for_pre_registration('cadastro_escola', school_id)
@@ -2335,9 +3055,9 @@ def get_all_students():
         if _read_from_postgres_first():
             students_pg = _postgres_repositories['student'].list_all_students()
             if students_pg or _is_postgres_mode():
-                return jsonify(students_pg)
+                return jsonify(_filter_students_by_scope(students_pg))
         students = _student_storage.list_all_students()
-        return jsonify(students)
+        return jsonify(_filter_students_by_scope(students))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2351,11 +3071,15 @@ def get_student(student_id):
             if student_pg or _is_postgres_mode():
                 if not student_pg:
                     return jsonify({"error": "Aluno não encontrado"}), 404
+                if not _student_visible_to_user(student_pg):
+                    return _scope_forbidden()
                 return jsonify(student_pg)
 
         student = _student_storage.get_student(student_id)
         if not student:
             return jsonify({"error": "Aluno não encontrado"}), 404
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
         return jsonify(student)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2369,6 +3093,10 @@ def create_student():
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
 
+    role = _current_role()
+    if not _can_manage_pre_registration(role):
+        return _scope_forbidden('Perfil sem permissão para criar aluno')
+
     school_id = str(data.get('school_id', '')).strip()
     if not school_id:
         return jsonify({"error": "Selecione uma escola cadastrada para o aluno"}), 400
@@ -2376,6 +3104,8 @@ def create_student():
     school = _get_school_record(school_id)
     if not school:
         return jsonify({"error": "Escola selecionada não foi encontrada"}), 400
+    if not _school_visible_to_user(school):
+        return _scope_forbidden('Sem acesso para cadastrar aluno nesta escola')
 
     teacher_ids_raw = data.get('teacher_ids')
     teacher_ids: List[str] = []
@@ -2388,19 +3118,18 @@ def create_student():
     if teacher_id_legacy and teacher_id_legacy not in teacher_ids:
         teacher_ids.append(teacher_id_legacy)
 
-    if not teacher_ids:
-        return jsonify({"error": "Selecione ao menos um docente cadastrado para o aluno"}), 400
-
     resolved_teacher_names: List[str] = []
     for teacher_id in teacher_ids:
         teacher = _get_teacher_record(teacher_id)
         if not teacher:
             return jsonify({"error": "Docente selecionado não foi encontrado"}), 400
+        if not _teacher_visible_to_user(teacher):
+            return _scope_forbidden('Sem acesso para vincular docente fora do escopo')
         resolved_teacher_names.append(teacher.get('name', ''))
 
     data['teacher_ids'] = teacher_ids
     data['teachers'] = resolved_teacher_names
-    data['teacher_id'] = teacher_ids[0]
+    data['teacher_id'] = teacher_ids[0] if teacher_ids else ''
     data['teacher_name'] = resolved_teacher_names[0] if resolved_teacher_names else ''
 
     data['school_name'] = school.get('name', '')
@@ -2439,6 +3168,22 @@ def update_student(student_id):
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
 
+    role = _current_role()
+    if role in PROFESSOR_ROLES or role in VIEWER_ROLES:
+        return _scope_forbidden('Perfil sem permissão para editar aluno')
+
+    current_student = _get_student_record(student_id)
+    if not current_student:
+        return jsonify({"error": "Aluno não encontrado"}), 404
+    if not _student_visible_to_user(current_student):
+        return _scope_forbidden()
+
+    if role in SCHOOL_STAFF_ROLES:
+        allowed_keys = {'teacher_ids', 'teacher_id'}
+        invalid_keys = [key for key in data.keys() if key not in allowed_keys]
+        if invalid_keys:
+            return _scope_forbidden('Coordenação pode apenas vincular aluno a docente')
+
     if 'school_id' in data:
         school_id = str(data.get('school_id', '')).strip()
         if not school_id:
@@ -2446,6 +3191,8 @@ def update_student(student_id):
         school = _get_school_record(school_id)
         if not school:
             return jsonify({"error": "Escola selecionada não foi encontrada"}), 400
+        if not _school_visible_to_user(school):
+            return _scope_forbidden('Sem acesso para mover aluno para esta escola')
         data['school_name'] = school.get('name', '')
 
     if 'teacher_ids' in data or 'teacher_id' in data:
@@ -2468,6 +3215,8 @@ def update_student(student_id):
             teacher = _get_teacher_record(teacher_id)
             if not teacher:
                 return jsonify({"error": "Docente selecionado não foi encontrado"}), 400
+            if not _teacher_visible_to_user(teacher):
+                return _scope_forbidden('Sem acesso para vincular docente fora do escopo')
             resolved_teacher_names.append(teacher.get('name', ''))
 
         data['teacher_ids'] = teacher_ids
@@ -2507,6 +3256,16 @@ def update_student(student_id):
 def delete_student(student_id):
     """Remove um cadastro de aluno"""
     try:
+        role = _current_role()
+        if not _can_manage_pre_registration(role):
+            return _scope_forbidden('Perfil sem permissão para remover aluno')
+
+        student = _get_student_record(student_id)
+        if not student:
+            return jsonify({"error": "Aluno não encontrado"}), 404
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
+
         if _is_postgres_mode():
             if _postgres_repositories['student'].delete_student(student_id):
                 _delete_form_links_for_pre_registration('cadastro_aluno', student_id)
@@ -2534,9 +3293,9 @@ def get_all_teachers():
         if _read_from_postgres_first():
             teachers_pg = _postgres_repositories['teacher'].list_all_teachers()
             if teachers_pg or _is_postgres_mode():
-                return jsonify(teachers_pg)
+                return jsonify(_filter_teachers_by_scope(teachers_pg))
         teachers = _teacher_storage.list_all_teachers()
-        return jsonify(teachers)
+        return jsonify(_filter_teachers_by_scope(teachers))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2550,11 +3309,15 @@ def get_teacher(teacher_id):
             if teacher_pg or _is_postgres_mode():
                 if not teacher_pg:
                     return jsonify({"error": "Docente não encontrado"}), 404
+                if not _teacher_visible_to_user(teacher_pg):
+                    return _scope_forbidden()
                 return jsonify(teacher_pg)
 
         teacher = _teacher_storage.get_teacher(teacher_id)
         if not teacher:
             return jsonify({"error": "Docente não encontrado"}), 404
+        if not _teacher_visible_to_user(teacher):
+            return _scope_forbidden()
         return jsonify(teacher)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2568,6 +3331,10 @@ def create_teacher():
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
 
+    role = _current_role()
+    if not _can_manage_pre_registration(role):
+        return _scope_forbidden('Perfil sem permissão para criar docentes')
+
     if not str(data.get('name', '')).strip():
         return jsonify({"error": "Nome do docente é obrigatório"}), 400
 
@@ -2578,6 +3345,8 @@ def create_teacher():
     school = _get_school_record(school_id)
     if not school:
         return jsonify({"error": "Escola selecionada não foi encontrada"}), 400
+    if not _school_visible_to_user(school):
+        return _scope_forbidden('Sem acesso para cadastrar docente nesta escola')
 
     data['school_name'] = school.get('name', '')
 
@@ -2615,6 +3384,16 @@ def update_teacher(teacher_id):
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
 
+    role = _current_role()
+    if not _can_manage_pre_registration(role):
+        return _scope_forbidden('Perfil sem permissão para editar docentes')
+
+    current_teacher = _get_teacher_record(teacher_id)
+    if not current_teacher:
+        return jsonify({"error": "Docente não encontrado"}), 404
+    if not _teacher_visible_to_user(current_teacher):
+        return _scope_forbidden()
+
     if not str(data.get('name', '')).strip():
         return jsonify({"error": "Nome do docente é obrigatório"}), 400
 
@@ -2625,6 +3404,8 @@ def update_teacher(teacher_id):
     school = _get_school_record(school_id)
     if not school:
         return jsonify({"error": "Escola selecionada não foi encontrada"}), 400
+    if not _school_visible_to_user(school):
+        return _scope_forbidden('Sem acesso para mover docente para esta escola')
 
     data['school_name'] = school.get('name', '')
 
@@ -2660,6 +3441,16 @@ def update_teacher(teacher_id):
 def delete_teacher(teacher_id):
     """Remove um cadastro de docente."""
     try:
+        role = _current_role()
+        if not _can_manage_pre_registration(role):
+            return _scope_forbidden('Perfil sem permissão para remover docentes')
+
+        teacher = _get_teacher_record(teacher_id)
+        if not teacher:
+            return jsonify({"error": "Docente não encontrado"}), 404
+        if not _teacher_visible_to_user(teacher):
+            return _scope_forbidden()
+
         if _is_postgres_mode():
             if _postgres_repositories['teacher'].delete_teacher(teacher_id):
                 return jsonify({"message": "Docente removido com sucesso"})
@@ -2902,6 +3693,21 @@ def rag_chat():
         student_id = data.get('student_id', '').strip()
         student_name = data.get('student_name', '').strip()
         school = data.get('school', '').strip()
+        school_id = data.get('school_id', '').strip()
+        new_session = bool(data.get('new_session'))
+
+        if student_id:
+            student = _get_student_record(student_id)
+            if not student:
+                return jsonify({"error": "Aluno não encontrado"}), 404
+            if not _student_visible_to_user(student):
+                return _scope_forbidden()
+            student_name = _student_name_from_record(student) or student_name
+            school = _student_school_from_record(student) or school
+            school_id = (student.get('school_id') or school_id or '').strip()
+        elif student_name and not _student_name_visible_to_user(student_name):
+            return _scope_forbidden()
+
         selected_sources = _parse_selected_sources(data.get('selected_sources'))
         include_vector_documents = bool(selected_sources.get('vector_documents'))
         chat_prompt_data = _prompt_storage.get_chat_prompt()
@@ -2920,7 +3726,15 @@ def rag_chat():
                 selected_sources=selected_sources,
             )
 
-        session_id = data.get('session_id') or (f"{student_name}__{school}" if student_name else 'default')
+        session_date = (data.get('session_date') or '').strip() or now_brasilia_iso()[:10]
+        user_id = (getattr(g, 'current_user', {}) or {}).get('id') or 'anonymous'
+        session_subject = student_id or student_name or 'global'
+        session_id = (data.get('session_id') or '').strip()
+        if not session_id:
+            if new_session:
+                session_id = str(data.get('new_session_id') or '').strip() or f"{user_id}__{session_subject}__{session_date}__{now_brasilia_filename()}"
+            else:
+                session_id = f"{user_id}__{session_subject}__{session_date}"
 
         result = engine.query(
             message=message,
@@ -2930,10 +3744,119 @@ def rag_chat():
             integrated_context=integrated_context,
             system_prompt_chat=chat_prompt_data['prompt'],
         )
+
+        chat_repo = _chat_history_repo()
+        if chat_repo and getattr(g, 'current_user', None):
+            scope = _resolve_chat_scope(
+                student_id=student_id,
+                student_name=student_name,
+                school_id=school_id,
+                school_name=school,
+            )
+            current_user = g.current_user
+
+            chat_repo.create_or_update_session(
+                session_id=session_id,
+                session_date=session_date,
+                created_by_user_id=(current_user.get('id') or '').strip(),
+                created_by_username=(current_user.get('username') or '').strip(),
+                created_by_role=(current_user.get('role') or '').strip(),
+                municipio_id=scope.get('municipio_id', ''),
+                school_id=scope.get('school_id', ''),
+                teacher_id=(current_user.get('teacher_id') or '').strip(),
+                student_id=scope.get('student_id', ''),
+                student_name=scope.get('student_name', ''),
+                school_name=scope.get('school_name', ''),
+                extra={
+                    'selected_sources': selected_sources,
+                },
+            )
+
+            chat_repo.append_message(
+                session_id=session_id,
+                role='user',
+                content=message,
+                user_id=(current_user.get('id') or '').strip(),
+                username=(current_user.get('username') or '').strip(),
+                extra={
+                    'selected_sources': selected_sources,
+                },
+            )
+
+            chat_repo.append_message(
+                session_id=session_id,
+                role='assistant',
+                content=(result.get('response') or '').strip(),
+                user_id='assistant',
+                username='assistant',
+                sources={'documents': result.get('sources') or []},
+                extra={
+                    'usage': result.get('usage') or {},
+                },
+            )
+
+        result['session_id'] = session_id
+        result['session_date'] = session_date
         result['selected_sources'] = selected_sources
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/chat/sessions', methods=['GET'])
+def list_chat_sessions():
+    """Lista sessões de chat com filtro opcional por dia e aluno."""
+    repo = _chat_history_repo()
+    if not repo:
+        return jsonify({'error': 'Histórico indisponível sem PostgreSQL/Supabase ativo'}), 503
+
+    day = (request.args.get('day') or '').strip()
+    student_id = (request.args.get('student_id') or '').strip()
+
+    sessions = repo.list_sessions(day=day, student_id=student_id)
+    sessions = _filter_chat_sessions_by_scope(sessions, g.current_user)
+    return jsonify({'sessions': sessions, 'count': len(sessions)})
+
+
+@app.route('/api/rag/chat/sessions/<session_id>/messages', methods=['GET'])
+def get_chat_session_messages(session_id):
+    """Retorna mensagens de uma sessão de chat."""
+    repo = _chat_history_repo()
+    if not repo:
+        return jsonify({'error': 'Histórico indisponível sem PostgreSQL/Supabase ativo'}), 503
+
+    session_data = repo.get_session(session_id)
+    if not session_data:
+        return jsonify({'error': 'Sessão não encontrada'}), 404
+
+    if not _can_access_chat_session(session_data, g.current_user):
+        return jsonify({'error': 'Acesso negado para este histórico'}), 403
+
+    messages = repo.list_messages(session_id)
+    return jsonify({'session': session_data, 'messages': messages, 'count': len(messages)})
+
+
+@app.route('/api/rag/chat/history-by-day', methods=['GET'])
+def list_chat_history_by_day():
+    """Retorna sessões agrupadas por dia conforme escopo do usuário."""
+    repo = _chat_history_repo()
+    if not repo:
+        return jsonify({'error': 'Histórico indisponível sem PostgreSQL/Supabase ativo'}), 503
+
+    day = (request.args.get('day') or '').strip()
+    student_id = (request.args.get('student_id') or '').strip()
+
+    sessions = repo.list_sessions(day=day, student_id=student_id)
+    sessions = _filter_chat_sessions_by_scope(sessions, g.current_user)
+
+    grouped: Dict[str, List[Dict]] = {}
+    for session_data in sessions:
+        key = (session_data.get('session_date') or '').strip() or 'sem-data'
+        grouped.setdefault(key, []).append(session_data)
+
+    days = sorted(grouped.keys(), reverse=True)
+    payload = [{'day': item, 'sessions': grouped[item], 'count': len(grouped[item])} for item in days]
+    return jsonify({'days': payload, 'count': len(payload)})
 
 
 @app.route('/api/rag/generate-pei', methods=['POST'])
@@ -2953,6 +3876,17 @@ def generate_pei():
 
     if not student_name or not school:
         return jsonify({"error": "Nome do estudante e escola são obrigatórios"}), 400
+
+    if student_id:
+        student = _get_student_record(student_id)
+        if not student:
+            return jsonify({"error": "Aluno não encontrado"}), 404
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
+        student_name = _student_name_from_record(student) or student_name
+        school = _student_school_from_record(student) or school
+    elif not _student_name_visible_to_user(student_name):
+        return _scope_forbidden()
 
     try:
         pei_prompt_data = _prompt_storage.get_pei_prompt()

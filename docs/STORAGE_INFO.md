@@ -168,7 +168,7 @@ backend/
     └── index.json           # Índice de PDIs
     └── [id].json            # Cada PDI
 ├── users/
-│   └── index.json           # Usuários e perfis (admin/editor/viewer)
+│   └── index.json           # Usuários e perfis (admin/secretaria/coordenacao/professor/viewer)
 └── audit_logs/
   └── events.jsonl         # Trilha de auditoria (append-only)
 ```

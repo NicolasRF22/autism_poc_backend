@@ -81,7 +81,7 @@ npm run dev
 
 - Usuário inicial: `admin`
 - Senha inicial: `admin123`
-- Após login, a aplicação libera as rotas conforme o perfil (`admin`, `editor`, `viewer`)
+- Após login, a aplicação libera as rotas conforme o perfil (`admin`, `secretaria`, `coordenacao`, `professor`, `viewer`)
 
 ## 📁 Estrutura do Projeto
 

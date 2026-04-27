@@ -86,12 +86,23 @@ Perfis disponíveis:
   - Pode gerenciar usuários
   - Pode consultar auditoria
 
-- `editor`
-  - Pode ler e alterar dados de negócio
-  - Não pode acessar rotas admin
+- `secretaria`
+  - Escopo por `municipio_id`
+  - Pode criar pré-cadastro de escolas, alunos e docentes no próprio município
+  - Leitura de escolas/alunos/docentes no próprio município
+
+- `coordenacao`
+  - Escopo por `school_id`
+  - Pode editar cadastro completo da própria escola
+  - Pode gerenciar vínculos aluno-docente da própria escola
+  - Leitura no escopo da escola
+
+- `professor`
+  - Escopo por `school_id` e opcional `teacher_id`
+  - Pode editar Diário, PDI e Estudo de Caso dos próprios alunos vinculados
 
 - `viewer`
-  - Somente leitura
+  - Somente leitura no escopo vinculado (`municipio_id` ou `school_id`)
   - Bloqueado em métodos de mutação (`POST`, `PUT`, `DELETE`, `PATCH`)
 
 ### Regras aplicadas
@@ -153,11 +164,11 @@ Cada linha JSON possui campos como:
 
 - `POST /api/auth/users`
   - Cria usuário
-  - Body: `{ "username": "...", "password": "...", "role": "admin|editor|viewer" }`
+  - Body: `{ "username": "...", "password": "...", "role": "admin|secretaria|coordenacao|professor|viewer" }`
 
 - `PUT /api/auth/users/<user_id>/role`
   - Atualiza perfil
-  - Body: `{ "role": "admin|editor|viewer" }`
+  - Body: `{ "role": "admin|secretaria|coordenacao|professor|viewer" }`
 
 ### Auditoria (admin)
 
@@ -204,14 +215,18 @@ Defaults usados para POC:
 
 Use o usuário admin para criar contas por API:
 
-- Criar editor para operação
-- Criar viewer para consulta
+- Criar secretaria para pré-cadastro municipal
+- Criar coordenação vinculada à escola
+- Criar professor vinculado à escola
+- Criar viewer para leitura no escopo
 
 Sugestão operacional:
 
 - Admin: coordenação TI/gestão
-- Editor: equipe pedagógica
-- Viewer: consulta/supervisão
+- Secretaria: equipe administrativa municipal
+- Coordenação: gestão pedagógica da escola
+- Professor: responsável por Diário/PDI/Estudo de Caso
+- Viewer: consulta/supervisão com leitura apenas
 
 ### 8.4 Ajustar perfil de um usuário
 

@@ -310,7 +310,7 @@ server {
 
 1. **DEBUG=False** em produção (segurança)
 2. **Não é MongoDB**, é **ChromaDB** (local, sem credenciais)
-3. **Autenticação JWT + RBAC está ativa** (`admin`, `editor`, `viewer`)
+3. **Autenticação JWT + RBAC está ativa** (`admin`, `secretaria`, `coordenacao`, `professor`, `viewer`)
 4. **Configure GOOGLE_API_KEY + AUTH_JWT_SECRET + credenciais admin**
 5. **JSON + ChromaDB + users + audit_logs** é suficiente para a POC
 6. **Fazer backups** das pastas `backend/`

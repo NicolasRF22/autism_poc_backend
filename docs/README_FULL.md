@@ -93,7 +93,7 @@ Persistidas via SQLAlchemy (repositórios em [backend/postgres_repositories.py](
 
 ## Funcionalidades principais
 
-- Autenticação JWT com perfis `admin`, `editor`, `viewer`.
+- Autenticação JWT com perfis `admin`, `secretaria`, `coordenacao`, `professor`, `viewer`.
 - Cadastro de escola, estudante e docente com vínculos entre entidades.
 - Diário individual e PDI individual por estudante.
 - Anexos em PDF por aluno na página dedicada `/anexos`.
@@ -205,8 +205,8 @@ chmod +x backend/scripts/start.sh
 
 - Login por JWT simples via `POST /api/auth/login`
 - Rotas protegidas por token Bearer (`Authorization: Bearer <token>`)
-- Perfis suportados: `admin`, `editor`, `viewer`
-- `viewer` possui apenas leitura; `admin` gerencia usuários e auditoria
+- Perfis suportados: `admin`, `secretaria`, `coordenacao`, `professor`, `viewer`
+- `viewer` possui apenas leitura no escopo; `admin` gerencia usuários e auditoria
 
 Credenciais padrão iniciais (podem ser sobrescritas por ambiente):
 
@@ -245,7 +245,7 @@ Buckets privados necessários no Supabase:
 | Método | Endpoint | Descrição |
 |---|---|---|
 | `GET` | `/api/auth/users` | Lista usuários cadastrados |
-| `POST` | `/api/auth/users` | Cria usuário (`admin`, `editor`, `viewer`) |
+| `POST` | `/api/auth/users` | Cria usuário (`admin`, `secretaria`, `coordenacao`, `professor`, `viewer`) |
 | `PUT` | `/api/auth/users/<user_id>/role` | Atualiza perfil do usuário |
 | `GET` | `/api/audit/events?limit=200` | Lista eventos de auditoria |
 | `GET` | `/api/admin/model-usage` | Uso de modelos Gemini (RPM/TPM/RPD + tokens por operação) |

@@ -69,6 +69,7 @@ class SchoolStorage:
                 "name": school.get("name", ""),
                 "cnpj": school.get("cnpj", ""),
                 "institution_type": school.get("institution_type", ""),
+                "municipio_id": school.get("municipio_id", ""),
                 "city": school.get("address", {}).get("city", "") if isinstance(school.get("address"), dict) else "",
                 "school_registration_completed": bool(school.get("school_registration_completed", False)),
                 "updated_at": school["updated_at"],

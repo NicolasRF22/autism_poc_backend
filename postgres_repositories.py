@@ -2,7 +2,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Dict, List, Optional
 
-from sqlalchemy import JSON, Integer, String, UniqueConstraint, create_engine, select
+from sqlalchemy import JSON, Integer, String, Text, UniqueConstraint, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from time_utils import now_brasilia_iso
@@ -14,6 +14,15 @@ class Base(DeclarativeBase):
 
 class SchoolRecord(Base):
     __tablename__ = 'schools'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class MunicipalityRecord(Base):
+    __tablename__ = 'municipalities'
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
@@ -89,6 +98,41 @@ class ObjectStorageFileRecord(Base):
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    extra_json: Mapped[dict] = mapped_column('extra', JSON, nullable=False, default=dict)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class ChatSessionRecord(Base):
+    __tablename__ = 'chat_sessions'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_by_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by_username: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_by_role: Mapped[str] = mapped_column(String(64), nullable=False)
+    municipio_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    school_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    teacher_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    student_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    student_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    school_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    extra_json: Mapped[dict] = mapped_column('extra', JSON, nullable=False, default=dict)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class ChatMessageRecord(Base):
+    __tablename__ = 'chat_messages'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    message_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    username: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    sources_json: Mapped[dict] = mapped_column('sources', JSON, nullable=False, default=dict)
     extra_json: Mapped[dict] = mapped_column('extra', JSON, nullable=False, default=dict)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -196,6 +240,7 @@ class SchoolPostgresRepository(_BaseRepository):
                 'name': school.get('name', ''),
                 'cnpj': school.get('cnpj', ''),
                 'institution_type': school.get('institution_type', ''),
+                'municipio_id': school.get('municipio_id', ''),
                 'city': school.get('address', {}).get('city', '') if isinstance(school.get('address'), dict) else '',
                 'school_registration_completed': bool(school.get('school_registration_completed', False)),
                 'updated_at': school['updated_at'],
@@ -264,11 +309,18 @@ class StudentPostgresRepository(_BaseRepository):
         summaries = []
         for row in rows:
             student = self._to_entity(row)
+            teacher_ids = student.get('teacher_ids') if isinstance(student.get('teacher_ids'), list) else []
+            legacy_teacher_id = str(student.get('teacher_id', '')).strip()
+            if legacy_teacher_id and legacy_teacher_id not in teacher_ids:
+                teacher_ids = [*teacher_ids, legacy_teacher_id]
             summaries.append({
                 'id': student['id'],
                 'name': student.get('name', student.get('studentName', '')),
                 'age': student.get('age', student.get('studentAge', '')),
+                'school_id': student.get('school_id', ''),
                 'school_name': student.get('school_name', student.get('schoolName', '')),
+                'teacher_ids': teacher_ids,
+                'teacher_id': legacy_teacher_id,
                 'class': student.get('class', student.get('className', '')),
                 'grade': student.get('grade', student.get('schoolYear', '')),
                 'case_study_completed': bool(student.get('case_study_completed', False)),
@@ -364,6 +416,7 @@ class TeacherPostgresRepository(_BaseRepository):
             summaries.append({
                 'id': teacher['id'],
                 'name': teacher.get('name', ''),
+                'school_id': teacher.get('school_id', ''),
                 'school_name': teacher.get('school_name', ''),
                 'specialization': teacher.get('specialization', ''),
                 'updated_at': teacher['updated_at'],
@@ -373,6 +426,54 @@ class TeacherPostgresRepository(_BaseRepository):
 
     def delete_teacher(self, teacher_id: str) -> bool:
         return self._delete(teacher_id)
+
+
+class MunicipalityPostgresRepository(_BaseRepository):
+    def __init__(self, session_factory):
+        super().__init__(session_factory, MunicipalityRecord)
+
+    def create_municipality(
+        self,
+        municipio_id: str,
+        name: str,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> Dict:
+        now = now_brasilia_iso()
+        created_at = created_at or now
+        updated_at = updated_at or now
+
+        payload = {
+            'name': name,
+        }
+
+        with self._session() as session:
+            existing = session.get(MunicipalityRecord, municipio_id)
+            if existing:
+                raise ValueError('Municipio já existe')
+
+            record = MunicipalityRecord(
+                id=municipio_id,
+                payload=payload,
+                created_at=created_at,
+                updated_at=updated_at,
+            )
+            session.add(record)
+            session.flush()
+            return self._to_entity(record)
+
+    def get_municipality(self, municipio_id: str) -> Optional[Dict]:
+        return self._get(municipio_id)
+
+    def list_all_municipalities(self) -> List[Dict]:
+        with self._session() as session:
+            rows = session.execute(select(MunicipalityRecord)).scalars().all()
+
+        municipalities = [
+            self._to_entity(row)
+            for row in rows
+        ]
+        return sorted(municipalities, key=lambda value: (value.get('name') or '').lower())
 
 
 class DiaryPostgresRepository(_BaseRepository):
@@ -1008,12 +1109,219 @@ class ObjectStorageMetadataPostgresRepository:
             return True
 
 
+class ChatHistoryPostgresRepository:
+    def __init__(self, session_factory):
+        self._session_factory = session_factory
+
+    @contextmanager
+    def _session(self):
+        session: Session = self._session_factory()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    @staticmethod
+    def _to_session(record: ChatSessionRecord) -> Dict:
+        return {
+            'id': record.id,
+            'session_date': record.session_date,
+            'created_by_user_id': record.created_by_user_id,
+            'created_by_username': record.created_by_username,
+            'created_by_role': record.created_by_role,
+            'municipio_id': record.municipio_id or '',
+            'school_id': record.school_id or '',
+            'teacher_id': record.teacher_id or '',
+            'student_id': record.student_id or '',
+            'student_name': record.student_name or '',
+            'school_name': record.school_name or '',
+            'extra': dict(record.extra_json or {}),
+            'created_at': record.created_at,
+            'updated_at': record.updated_at,
+        }
+
+    @staticmethod
+    def _to_message(record: ChatMessageRecord) -> Dict:
+        return {
+            'id': record.id,
+            'session_id': record.session_id,
+            'message_index': int(record.message_index or 0),
+            'role': record.role,
+            'content': record.content,
+            'user_id': record.user_id or '',
+            'username': record.username or '',
+            'sources': dict(record.sources_json or {}),
+            'extra': dict(record.extra_json or {}),
+            'created_at': record.created_at,
+            'updated_at': record.updated_at,
+        }
+
+    def create_or_update_session(
+        self,
+        session_id: str,
+        session_date: str,
+        created_by_user_id: str,
+        created_by_username: str,
+        created_by_role: str,
+        municipio_id: str = '',
+        school_id: str = '',
+        teacher_id: str = '',
+        student_id: str = '',
+        student_name: str = '',
+        school_name: str = '',
+        extra: Optional[Dict] = None,
+    ) -> Dict:
+        now = now_brasilia_iso()
+        session_id = str(session_id or '').strip() or str(uuid.uuid4())
+        session_date = str(session_date or '').strip() or now[:10]
+
+        with self._session() as session:
+            record = session.get(ChatSessionRecord, session_id)
+            if record is None:
+                record = ChatSessionRecord(
+                    id=session_id,
+                    session_date=session_date,
+                    created_by_user_id=str(created_by_user_id or '').strip(),
+                    created_by_username=str(created_by_username or '').strip(),
+                    created_by_role=str(created_by_role or '').strip(),
+                    municipio_id=str(municipio_id or '').strip() or None,
+                    school_id=str(school_id or '').strip() or None,
+                    teacher_id=str(teacher_id or '').strip() or None,
+                    student_id=str(student_id or '').strip() or None,
+                    student_name=str(student_name or '').strip() or None,
+                    school_name=str(school_name or '').strip() or None,
+                    extra_json=dict(extra or {}),
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(record)
+                session.flush()
+                return self._to_session(record)
+
+            record.session_date = session_date
+            record.municipio_id = str(municipio_id or '').strip() or None
+            record.school_id = str(school_id or '').strip() or None
+            record.teacher_id = str(teacher_id or '').strip() or None
+            record.student_id = str(student_id or '').strip() or None
+            record.student_name = str(student_name or '').strip() or None
+            record.school_name = str(school_name or '').strip() or None
+            record.extra_json = dict(extra or {})
+            record.updated_at = now
+            session.flush()
+            return self._to_session(record)
+
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        user_id: str = '',
+        username: str = '',
+        sources: Optional[Dict] = None,
+        extra: Optional[Dict] = None,
+    ) -> Dict:
+        now = now_brasilia_iso()
+        session_id = str(session_id or '').strip()
+        if not session_id:
+            raise ValueError('session_id é obrigatório')
+
+        with self._session() as session:
+            existing_rows = session.execute(
+                select(ChatMessageRecord).where(ChatMessageRecord.session_id == session_id)
+            ).scalars().all()
+            next_index = len(existing_rows)
+
+            row = ChatMessageRecord(
+                id=str(uuid.uuid4()),
+                session_id=session_id,
+                message_index=next_index,
+                role=str(role or '').strip() or 'assistant',
+                content=str(content or '').strip(),
+                user_id=str(user_id or '').strip() or None,
+                username=str(username or '').strip() or None,
+                sources_json=dict(sources or {}),
+                extra_json=dict(extra or {}),
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+
+            session_row = session.get(ChatSessionRecord, session_id)
+            if session_row:
+                session_row.updated_at = now
+
+            session.flush()
+            return self._to_message(row)
+
+    def get_session(self, session_id: str) -> Optional[Dict]:
+        with self._session() as session:
+            row = session.get(ChatSessionRecord, session_id)
+            if not row:
+                return None
+            return self._to_session(row)
+
+    def list_sessions(
+        self,
+        day: str = '',
+        student_id: str = '',
+    ) -> List[Dict]:
+        with self._session() as session:
+            stmt = select(ChatSessionRecord)
+
+            day = str(day or '').strip()
+            student_id = str(student_id or '').strip()
+            if day:
+                stmt = stmt.where(ChatSessionRecord.session_date == day)
+            if student_id:
+                stmt = stmt.where(ChatSessionRecord.student_id == student_id)
+
+            rows = session.execute(stmt).scalars().all()
+            entities = [self._to_session(row) for row in rows]
+            entities.sort(key=lambda item: item.get('updated_at') or '', reverse=True)
+            return entities
+
+    def list_messages(self, session_id: str) -> List[Dict]:
+        with self._session() as session:
+            rows = session.execute(
+                select(ChatMessageRecord).where(
+                    ChatMessageRecord.session_id == str(session_id or '').strip()
+                )
+            ).scalars().all()
+            entities = [self._to_message(row) for row in rows]
+            entities.sort(key=lambda item: item.get('message_index', 0))
+            return entities
+
+    def delete_session(self, session_id: str) -> bool:
+        session_id = str(session_id or '').strip()
+        if not session_id:
+            return False
+
+        with self._session() as session:
+            session_row = session.get(ChatSessionRecord, session_id)
+            if not session_row:
+                return False
+
+            rows = session.execute(
+                select(ChatMessageRecord).where(ChatMessageRecord.session_id == session_id)
+            ).scalars().all()
+            for row in rows:
+                session.delete(row)
+
+            session.delete(session_row)
+            return True
+
+
 def create_postgres_repositories(database_url: str):
     engine = create_engine(database_url, future=True)
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
 
     return {
+        'municipality': MunicipalityPostgresRepository(session_factory),
         'school': SchoolPostgresRepository(session_factory),
         'student': StudentPostgresRepository(session_factory),
         'teacher': TeacherPostgresRepository(session_factory),
@@ -1021,4 +1329,5 @@ def create_postgres_repositories(database_url: str):
         'pdi': PDIPostgresRepository(session_factory),
         'form_submission': FormSubmissionsPostgresRepository(session_factory),
         'object_metadata': ObjectStorageMetadataPostgresRepository(session_factory),
+        'chat_history': ChatHistoryPostgresRepository(session_factory),
     }

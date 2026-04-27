@@ -343,7 +343,7 @@ orjson==3.9.10        # JSON mais rápido
 ### Dados Sensíveis
 - ✅ `.env` no `.gitignore`
 - ✅ CORS habilitado com suporte a preflight
-- ✅ Autenticação JWT com controle de perfil (`admin`, `editor`, `viewer`)
+- ✅ Autenticação JWT com controle de perfil (`admin`, `secretaria`, `coordenacao`, `professor`, `viewer`)
 - ✅ Auditoria de ações mutáveis e downloads/PDF
 - ✅ Validação de inputs
 - ⚠️ Dados não criptografados (considere em produção)

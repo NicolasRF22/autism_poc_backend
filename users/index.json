@@ -7,5 +7,70 @@
     "is_active": true,
     "created_at": "2026-04-06T19:26:31.123700-03:00",
     "updated_at": "2026-04-06T19:26:31.123748-03:00"
+  },
+  {
+    "id": "678ead90-cda1-44e5-b71d-3acad7603ba6",
+    "username": "sec",
+    "password_hash": "scrypt:32768:8:1$ITtOlmzUgs0iw3uS$6c707435c6e5485de2ffc069145816b7311a30329c4999908add11cf7c1acf5057082688c09034ad5c079dfb1c7062e510a55fe8aa1ada207f8417543dac73f3",
+    "name": "Secretaria Piranguinho",
+    "role": "secretaria",
+    "municipio_id": "piranguinho",
+    "school_id": "",
+    "teacher_id": "",
+    "is_active": true,
+    "created_at": "2026-04-27T01:14:16.085260-03:00",
+    "updated_at": "2026-04-27T01:14:16.085260-03:00"
+  },
+  {
+    "id": "380fe2ef-f4a0-4213-baa9-bd8f7694e76f",
+    "username": "sec2",
+    "password_hash": "scrypt:32768:8:1$L4rXVgC1kHovtB8I$9380bdf3fc3b02040c2ad69247f31e16db6c16d4f5c36e6b416a11d4e8fcb6a2261d56413b8e785181d6d64721c2cc931763bb52369c975418667215f0bd8f20",
+    "name": "Secretaria Itajubá",
+    "role": "secretaria",
+    "municipio_id": "itajuba",
+    "school_id": "",
+    "teacher_id": "",
+    "is_active": true,
+    "created_at": "2026-04-27T01:17:37.103326-03:00",
+    "updated_at": "2026-04-27T01:17:37.103326-03:00"
+  },
+  {
+    "id": "bf31df98-d196-474f-a84a-c6d784686e78",
+    "username": "cor",
+    "password_hash": "scrypt:32768:8:1$kIqEPFamlRVq81Zj$f314e93a3fbc681848daf1798ed37fc3eac3e19e2dd8e4b39c80138df86fffe8e3839d9f37b9ac2dc94df7a58bd2b93bcaf2e35cd6bc6112e0091ecdea9e1451",
+    "name": "Coordenação Teste",
+    "role": "coordenacao",
+    "municipio_id": "piranguinho",
+    "school_id": "681857d5-3c30-4fcc-ad69-8e97a5710ab9",
+    "teacher_id": "",
+    "is_active": true,
+    "created_at": "2026-04-27T08:43:56.655940-03:00",
+    "updated_at": "2026-04-27T08:43:56.655940-03:00"
+  },
+  {
+    "id": "1dadef7b-65ff-43b4-a8b7-a93480ce01c2",
+    "username": "cor2",
+    "password_hash": "scrypt:32768:8:1$3KgmKNyQ6LOFdK44$c63982adde2d6ff56b668c17071a61c9635b3814c17c5e709bdeb08f469bd5bb6a558f2886001a2ee04f314a08feab526c44ae43357b50bfa1050aa618ab529a",
+    "name": "Coordenação Almerinda",
+    "role": "coordenacao",
+    "municipio_id": "piranguinho",
+    "school_id": "5e5ba504-1b72-496d-bb55-01dfd341fac1",
+    "teacher_id": "",
+    "is_active": true,
+    "created_at": "2026-04-27T08:44:36.233470-03:00",
+    "updated_at": "2026-04-27T08:44:36.233470-03:00"
+  },
+  {
+    "id": "e0f050c0-e0ec-4ca0-ac85-88f77cb68262",
+    "username": "nic",
+    "password_hash": "scrypt:32768:8:1$UCCeYS56DNzqKxKH$9fe6169f0bab61e89094282e17ee3c29a8575bbc8e18dbbb5f79a8ed2c54b807d4f6e73aa1b78625b406119aabf840f74c2966b0a7527fd72c408a8ee84c0949",
+    "name": "Professor Nicolas",
+    "role": "professor",
+    "municipio_id": "piranguinho",
+    "school_id": "5e5ba504-1b72-496d-bb55-01dfd341fac1",
+    "teacher_id": "2d799c08-880c-487a-b1e4-096572745b57",
+    "is_active": true,
+    "created_at": "2026-04-27T17:57:10.998611-03:00",
+    "updated_at": "2026-04-27T17:57:10.998611-03:00"
   }
 ]
