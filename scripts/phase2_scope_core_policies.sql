@@ -32,7 +32,7 @@ stable
 as $$
   select teacher_id
   from public.user_profiles
-  where id = auth.uid()
+  where id::text = auth.uid()::text
     and is_active = true
   limit 1;
 $$;
@@ -147,7 +147,7 @@ as $$
           and coalesce(public.current_user_teacher_id(), '') <> ''
           and (
             coalesce(st.payload ->> 'teacher_id', '') = public.current_user_teacher_id()
-            or coalesce(st.payload -> 'teacher_ids', '[]'::jsonb) ? public.current_user_teacher_id()
+            or (st.payload::jsonb -> 'teacher_ids' ? public.current_user_teacher_id())
           )
         )
       )

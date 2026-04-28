@@ -73,7 +73,33 @@ python3 scripts/backfill_object_storage.py
 
 Resultado esperado: contagem de migrados/pulados/falhas para RAG e PEI.
 
-## 4) Validação no painel Supabase (SQL Editor)
+## 4) RLS no Supabase
+
+Para remover os avisos `UNRESTRICTED` e fechar o acesso direto às tabelas sensíveis, execute os scripts nesta ordem no **SQL Editor**:
+
+1. `scripts/phase1_scope_chat_schema.sql`
+2. `scripts/phase2_scope_core_policies.sql`
+3. `scripts/phase3_enable_rls_hardening.sql`
+
+O backend atual usa a `service role key` do Supabase para ler e escrever, então continuar com RLS ligado não quebra a aplicação. O efeito prático é bloquear acesso direto por `anon`/`authenticated` e deixar o backend como ponto central de acesso.
+
+Tabelas cobertas por essa proteção:
+
+- `user_profiles`
+- `chat_sessions`
+- `chat_messages`
+- `municipalities`
+- `schools`
+- `students`
+- `teachers`
+- `teacher_student_links`
+- `diary_entries`
+- `pdis`
+- `case_study_submissions`
+- `school_registration_submissions`
+- `object_storage_files`
+
+## 5) Validação no painel Supabase (SQL Editor)
 
 Abra **SQL Editor** e execute:
 
@@ -113,7 +139,7 @@ Interpretação:
 - Persistência no Supabase está funcional para os domínios validados no smoke.
 - `teachers_count = 0` é compatível com o smoke atual, que cria e remove docente ao final.
 
-## 5) Checklist de produção no painel
+## 6) Checklist de produção no painel
 
 - Ativar/confirmar **Point-in-time Recovery (PITR)**.
 - Confirmar política de backup do projeto.
@@ -127,7 +153,7 @@ Interpretação:
 - `Project Settings -> Database`: confirmar Session Pooler ativo e URL correta.
 - `Database Backups`: confirmar PITR/backup do projeto.
 
-## 6) Estratégia de rollout recomendada
+## 7) Estratégia de rollout recomendada
 
 1. Iniciar com `DATA_BACKEND=dual` por curto período.
 2. Rodar smoke e validar leituras/escritas no Supabase.
@@ -135,7 +161,7 @@ Interpretação:
 4. Monitorar erros por 24-48h.
 5. Congelar escrita em arquivo local.
 
-## 7) Troubleshooting rápido
+## 8) Troubleshooting rápido
 
 - `RuntimeError: DATABASE_URL é obrigatório...`
   - `DATABASE_URL` não carregada no ambiente.

@@ -94,7 +94,7 @@ stable
 as $$
   select role
   from public.user_profiles
-  where id = auth.uid()
+  where id::text = auth.uid()::text
     and is_active = true
   limit 1;
 $$;
@@ -106,7 +106,7 @@ stable
 as $$
   select municipio_id
   from public.user_profiles
-  where id = auth.uid()
+  where id::text = auth.uid()::text
     and is_active = true
   limit 1;
 $$;
@@ -118,7 +118,7 @@ stable
 as $$
   select school_id
   from public.user_profiles
-  where id = auth.uid()
+  where id::text = auth.uid()::text
     and is_active = true
   limit 1;
 $$;

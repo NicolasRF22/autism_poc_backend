@@ -1013,10 +1013,6 @@ def _student_visible_to_user(student: Dict, user: Optional[Dict] = None) -> bool
         return _school_visible_to_user(school, u) if school else False
 
     if role in PROFESSOR_ROLES:
-        professor_school_id = (u.get('school_id') or '').strip()
-        if professor_school_id and professor_school_id == school_id:
-            return True
-
         teacher_ids = _get_professor_teacher_ids(u)
         if not teacher_ids:
             return False
@@ -1100,6 +1096,66 @@ def _filter_students_by_scope(students: List[Dict], user: Optional[Dict] = None)
 def _filter_teachers_by_scope(teachers: List[Dict], user: Optional[Dict] = None) -> List[Dict]:
     u = user or _current_user()
     return [teacher for teacher in teachers if _teacher_visible_to_user(teacher, u)]
+
+
+def _normalize_scope_text(value: str) -> str:
+    return _normalize_student_name(value)
+
+
+def _visible_rag_student_keys(user: Optional[Dict] = None) -> Set[str]:
+    u = user or _current_user()
+    if _is_global_user(u):
+        return set()
+
+    visible_students = _filter_students_by_scope(_list_student_summaries(), u)
+    visible_keys: Set[str] = set()
+
+    for student in visible_students:
+        student_name = (student.get('name') or student.get('studentName') or '').strip()
+        school_name = (student.get('school_name') or student.get('schoolName') or '').strip()
+
+        if not school_name:
+            school_id = (student.get('school_id') or '').strip()
+            school_record = _get_school_record(school_id) if school_id else None
+            if school_record:
+                school_name = (school_record.get('name') or '').strip()
+
+        if student_name and school_name:
+            visible_keys.add(f'{_normalize_scope_text(student_name)}::{_normalize_scope_text(school_name)}')
+
+    return visible_keys
+
+
+def _rag_student_visible_to_user(student: Dict, user: Optional[Dict] = None) -> bool:
+    u = user or _current_user()
+    if _is_global_user(u):
+        return True
+
+    student_name = (student.get('student_name') or '').strip()
+    school_name = (student.get('school') or '').strip()
+    if not student_name or not school_name:
+        return False
+
+    visible_keys = _visible_rag_student_keys(u)
+    if not visible_keys:
+        return False
+
+    key = f'{_normalize_scope_text(student_name)}::{_normalize_scope_text(school_name)}'
+    return key in visible_keys
+
+
+def _filter_rag_students_by_scope(students: List[Dict], user: Optional[Dict] = None) -> List[Dict]:
+    u = user or _current_user()
+    if _is_global_user(u):
+        return students
+    return [student for student in students if _rag_student_visible_to_user(student, u)]
+
+
+def _filter_rag_documents_by_scope(documents: List[Dict], user: Optional[Dict] = None) -> List[Dict]:
+    u = user or _current_user()
+    if _is_global_user(u):
+        return documents
+    return [document for document in documents if _rag_student_visible_to_user(document, u)]
 
 
 def _submission_visible_to_user(submission: Dict, user: Optional[Dict] = None) -> bool:
@@ -1863,6 +1919,32 @@ def create_municipality():
         return jsonify({'message': 'Município criado com sucesso', 'municipality': municipality}), 201
     except ValueError as err:
         return jsonify({'error': str(err)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/municipalities/<municipio_id>', methods=['DELETE'])
+def delete_municipality(municipio_id):
+    """Remove um município por id (apenas admin)."""
+    if _current_role() not in ADMIN_ROLES:
+        return jsonify({'error': 'Apenas admin pode apagar municípios'}), 403
+
+    municipio_id = _normalize_municipio_id(municipio_id)
+    if not municipio_id:
+        return jsonify({'error': 'municipio_id inválido'}), 400
+
+    try:
+        if _is_postgres_mode():
+            deleted = _postgres_repositories['municipality'].delete_municipality(municipio_id)
+        else:
+            deleted = _municipality_storage.delete_municipality(municipio_id)
+            if _is_dual_mode():
+                _postgres_repositories['municipality'].delete_municipality(municipio_id)
+
+        if not deleted:
+            return jsonify({'error': 'Município não encontrado'}), 404
+
+        return jsonify({'message': 'Município apagado com sucesso'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -3496,6 +3578,12 @@ def upload_document():
         metadata = json.loads(metadata_raw)
         metadata['file_name'] = filename
 
+        if not _rag_student_visible_to_user({
+            'student_name': metadata.get('student_name', ''),
+            'school': metadata.get('school', ''),
+        }):
+            return _scope_forbidden('Você só pode anexar arquivos para alunos do seu escopo')
+
         from document_processor import extract_text_from_pdf, split_text_into_chunks, generate_embeddings
         text = extract_text_from_pdf(filepath)
         if not text:
@@ -3561,7 +3649,7 @@ def get_rag_students():
         return jsonify({"error": "GOOGLE_API_KEY não configurada no .env"}), 503
     try:
         students = engine.vector_store.list_students()
-        return jsonify(students)
+        return jsonify(_filter_rag_students_by_scope(students))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -3574,7 +3662,7 @@ def get_rag_documents():
         return jsonify({"error": "GOOGLE_API_KEY não configurada no .env"}), 503
     try:
         docs = engine.vector_store.list_documents()
-        return jsonify(docs)
+        return jsonify(_filter_rag_documents_by_scope(docs))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -3586,8 +3674,13 @@ def delete_rag_document(doc_id):
     if engine is None:
         return jsonify({"error": "GOOGLE_API_KEY não configurada no .env"}), 503
     try:
-        engine.vector_store.delete_document(doc_id)
+        doc = engine.vector_store.get_document(doc_id)
+        if not doc:
+            return jsonify({"error": "Documento não encontrado"}), 404
+        if not _rag_student_visible_to_user(doc):
+            return _scope_forbidden('Você não pode apagar este anexo')
 
+        engine.vector_store.delete_document(doc_id)
         file_meta = _get_object_metadata(RAG_DOC_TYPE, doc_id)
         object_key = file_meta.get('object_key') if file_meta else f'{doc_id}.pdf'
         _object_storage.delete_file(RAG_STORAGE_BUCKET, object_key)
@@ -3608,6 +3701,8 @@ def download_rag_document(doc_id):
     doc = engine.vector_store.get_document(doc_id)
     if not doc:
         return jsonify({"error": "Documento não encontrado"}), 404
+    if not _rag_student_visible_to_user(doc):
+        return _scope_forbidden('Você não pode baixar este anexo')
 
     file_meta = _get_object_metadata(RAG_DOC_TYPE, doc_id)
     object_key = file_meta.get('object_key') if file_meta else f'{doc_id}.pdf'

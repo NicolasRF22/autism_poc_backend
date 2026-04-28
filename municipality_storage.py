@@ -55,3 +55,14 @@ class MunicipalityStorage:
         self._index.append(municipality)
         self._save_index()
         return municipality
+
+    def delete_municipality(self, municipio_id: str) -> bool:
+        municipio_id = str(municipio_id or "").strip()
+        if not municipio_id:
+            return False
+        existing = self.get_municipality(municipio_id)
+        if not existing:
+            return False
+        self._index = [m for m in self._index if (m.get("id") or "") != municipio_id]
+        self._save_index()
+        return True
