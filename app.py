@@ -3,6 +3,8 @@ import copy
 import unicodedata
 import difflib
 import time
+import mimetypes
+import uuid
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify, send_file, g
@@ -62,6 +64,111 @@ def _name_tokens(value: str) -> List[str]:
     normalized = _normalize_student_name(value)
     return [token for token in normalized.split(' ') if token]
 
+
+def _truncate_excerpt(value, max_length: int = 360) -> str:
+    if value is None:
+        return ''
+
+    if isinstance(value, (dict, list, tuple, set)):
+        try:
+            value = json.dumps(value, ensure_ascii=False)
+        except Exception:
+            value = str(value)
+
+    text = str(value).strip()
+    if not text:
+        return ''
+
+    if len(text) <= max_length:
+        return text
+
+    return text[:max_length].rstrip() + '...'
+
+
+def _extract_entry_excerpt(entry: Dict, preferred_keys: Optional[List[str]] = None, max_length: int = 360) -> str:
+    if not isinstance(entry, dict):
+        return _truncate_excerpt(entry, max_length=max_length)
+
+    keys_to_check = preferred_keys or [
+        'excerpt',
+        'summary',
+        'open_obs',
+        'observations',
+        'notes',
+        'content',
+        'text',
+        'markdown',
+    ]
+
+    for key in keys_to_check:
+        value = entry.get(key)
+        excerpt = _truncate_excerpt(value, max_length=max_length)
+        if excerpt:
+            return excerpt
+
+    for value in entry.values():
+        excerpt = _truncate_excerpt(value, max_length=max_length)
+        if excerpt:
+            return excerpt
+
+    return ''
+
+
+def _build_source_evidence_block(
+    student_record: Optional[Dict] = None,
+    school_record: Optional[Dict] = None,
+    linked_teacher_records: Optional[List[Dict]] = None,
+    diary_entries: Optional[List[Dict]] = None,
+    pdi: Optional[Dict] = None,
+    linked_peis: Optional[List[Dict]] = None,
+    vector_summary: Optional[Dict] = None,
+) -> str:
+    lines: List[str] = []
+
+    if student_record:
+        lines.append(
+            'Evidencia - Cadastro do aluno: '
+            + _truncate_excerpt(_extract_entry_excerpt(student_record), max_length=220)
+        )
+
+    if school_record:
+        lines.append(
+            'Evidencia - Cadastro da escola: '
+            + _truncate_excerpt(_extract_entry_excerpt(school_record), max_length=220)
+        )
+
+    if linked_teacher_records:
+        teacher_excerpt = _truncate_excerpt(_extract_entry_excerpt(linked_teacher_records[0]), max_length=220)
+        lines.append(f'Evidencia - Docentes vinculados ({len(linked_teacher_records)}): {teacher_excerpt}')
+
+    if diary_entries:
+        diary_excerpt = _truncate_excerpt(_extract_entry_excerpt(diary_entries[0]), max_length=220)
+        lines.append(f'Evidencia - Diario ({len(diary_entries)} entradas): {diary_excerpt}')
+
+    if pdi:
+        lines.append(
+            'Evidencia - PDI: '
+            + _truncate_excerpt(_extract_entry_excerpt(pdi), max_length=220)
+        )
+
+    if linked_peis:
+        pei_full = _pei_storage.get(linked_peis[0].get('id')) or linked_peis[0]
+        pei_excerpt = _truncate_excerpt(pei_full.get('markdown') or '', max_length=300)
+        lines.append(f'Evidencia - PEI vinculado ({len(linked_peis)}): {pei_excerpt}')
+
+    if vector_summary and vector_summary.get('document_count', 0) > 0:
+        documents = vector_summary.get('documents') or []
+        first_doc = documents[0] if documents else {}
+        first_excerpt = _truncate_excerpt(first_doc.get('excerpt') or '', max_length=220)
+        lines.append(
+            f"Evidencia - Documentos do RAG ({vector_summary.get('document_count', 0)}): {first_excerpt}"
+        )
+
+    if not lines:
+        return ''
+
+    return '\n'.join(lines)
+
 app = Flask(__name__)
 DEBUG_MODE = _to_bool(os.getenv('DEBUG', 'False'), default=False)
 CORS(app, resources={r'/api/*': {'origins': _parse_cors_origins()}})
@@ -73,16 +180,19 @@ UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
 RAG_DOCUMENTS_FOLDER = os.path.join(os.path.dirname(__file__), 'rag_documents')
 PEIS_FOLDER = os.path.join(os.path.dirname(__file__), 'peis')
 DIARIES_FOLDER = os.path.join(os.path.dirname(__file__), 'diaries')
+DIARY_IMAGES_FOLDER = os.path.join(os.path.dirname(__file__), 'diary_images')
 PDIS_FOLDER = os.path.join(os.path.dirname(__file__), 'pdis')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RAG_DOCUMENTS_FOLDER, exist_ok=True)
 os.makedirs(PEIS_FOLDER, exist_ok=True)
 os.makedirs(DIARIES_FOLDER, exist_ok=True)
+os.makedirs(DIARY_IMAGES_FOLDER, exist_ok=True)
 os.makedirs(PDIS_FOLDER, exist_ok=True)
 
 from pei_storage import PEIStorage
 from diary_storage import DiaryStorage
 from pdi_storage import PDIStorage
+from pdi_defaults import get_pdi_subject_ids_for_grade, normalize_trimesters
 from prompt_storage import PromptStorage
 from school_storage import SchoolStorage
 from municipality_storage import MunicipalityStorage
@@ -127,9 +237,22 @@ SUPABASE_URL = (os.getenv('SUPABASE_URL') or '').strip()
 SUPABASE_SERVICE_ROLE_KEY = (os.getenv('SUPABASE_SERVICE_ROLE_KEY') or '').strip()
 RAG_STORAGE_BUCKET = (os.getenv('SUPABASE_STORAGE_BUCKET_RAG', 'rag-documents') or 'rag-documents').strip()
 PEI_STORAGE_BUCKET = (os.getenv('SUPABASE_STORAGE_BUCKET_PEI', 'pei-documents') or 'pei-documents').strip()
+DIARY_IMAGES_BUCKET = (os.getenv('SUPABASE_STORAGE_BUCKET_DIARY_IMAGES', 'diary-images') or 'diary-images').strip()
+# Lista canônica de anos/series esperada pelo sistema
+ALLOWED_GRADES = [
+    '1° Ano do Infantil',
+    '2° Ano do Infantil',
+    '3° Ano do Infantil',
+    '1° Ano do Fundamental I',
+    '2° Ano do Fundamental I',
+    '3° Ano do Fundamental I',
+    '4° Ano do Fundamental I',
+    '5° Ano do Fundamental I',
+]
 
 RAG_DOC_TYPE = 'rag_attachment_pdf'
 PEI_DOC_TYPE = 'pei_generated_pdf'
+DIARY_IMAGE_DOC_TYPE = 'diary_entry_image'
 
 _postgres_repositories = None
 if DATA_BACKEND in {'postgres', 'dual'}:
@@ -139,6 +262,9 @@ if DATA_BACKEND in {'postgres', 'dual'}:
         print('Aviso: DATA_BACKEND=dual sem DATABASE_URL; usando apenas armazenamento em arquivo.')
     else:
         _postgres_repositories = create_postgres_repositories(DATABASE_URL)
+
+if _postgres_repositories is not None:
+    _postgres_repositories['pdi'].normalize_existing_pdis()
 
 if _postgres_repositories is not None:
     _auth_storage = _postgres_repositories['auth']
@@ -155,6 +281,7 @@ try:
         local_bucket_dirs={
             RAG_STORAGE_BUCKET: RAG_DOCUMENTS_FOLDER,
             PEI_STORAGE_BUCKET: PEIS_FOLDER,
+            DIARY_IMAGES_BUCKET: DIARY_IMAGES_FOLDER,
         },
         supabase_url=SUPABASE_URL,
         supabase_service_role_key=SUPABASE_SERVICE_ROLE_KEY,
@@ -442,6 +569,7 @@ def _summarize_vector_documents_for_student(engine, student_name: str, school: s
                     'doc_id': doc_id,
                     'file_name': doc.get('file_name', ''),
                     'upload_date': doc.get('upload_date', ''),
+                    'excerpt': _truncate_excerpt(doc.get('text') or doc.get('excerpt') or '', max_length=280),
                 }
 
     documents = sorted(
@@ -520,6 +648,7 @@ def _build_integrated_student_context(
     student_id: str = '',
     max_diary_entries: int = 8,
     selected_sources: Dict[str, bool] | None = None,
+    engine=None,
 ) -> str:
     source_selection = _parse_selected_sources(selected_sources)
     sections: List[str] = []
@@ -579,6 +708,10 @@ def _build_integrated_student_context(
         )
 
     pdi = _get_pdi_for_student(canonical_student_name, student_id=student_id)
+    vector_summary = None
+    if engine is not None and source_selection.get('vector_documents'):
+        vector_summary = _summarize_vector_documents_for_student(engine, canonical_student_name, school_record.get('name', '') if school_record else '')
+
     if source_selection.get('pdi') and pdi:
         sections.append(
             'PDI do aluno (JSON):\n'
@@ -595,13 +728,25 @@ def _build_integrated_student_context(
                 'id': pei_full.get('id'),
                 'created_at': pei_full.get('created_at'),
                 'school': pei_full.get('school'),
-                'excerpt': markdown_text[:1800],
+                'excerpt': _truncate_excerpt(markdown_text, max_length=1200),
             })
 
         sections.append(
             'PEIs anteriores vinculados ao aluno (JSON):\n'
             + json.dumps(pei_summaries, ensure_ascii=False, indent=2)
         )
+
+    evidence_block = _build_source_evidence_block(
+        student_record=student_record,
+        school_record=school_record,
+        linked_teacher_records=linked_teacher_records,
+        diary_entries=diary_entries[:max_diary_entries] if diary_entries else [],
+        pdi=pdi,
+        linked_peis=linked_peis,
+        vector_summary=vector_summary,
+    )
+    if evidence_block:
+        sections.insert(0, evidence_block)
 
     source_status = (
         'Status oficial das fontes (use estas flags para responder perguntas de existência de dados):\n'
@@ -703,14 +848,25 @@ def get_pei_sources_preview():
                 "included": docs_summary['document_count'] > 0,
                 "document_count": docs_summary['document_count'],
                 "documents": docs_summary['documents'],
+                "excerpt": _extract_entry_excerpt(docs_summary['documents'][0]) if docs_summary['documents'] else '',
             },
             "diary": {
                 "included": len(diary_entries) > 0,
                 "entries_count": len(diary_entries),
+                "entries": [
+                    {
+                        'id': item.get('id'),
+                        'diary_date': item.get('diary_date'),
+                        'excerpt': _extract_entry_excerpt(item),
+                    }
+                    for item in diary_entries[:3]
+                ],
+                "excerpt": _extract_entry_excerpt(diary_entries[0]) if diary_entries else '',
             },
             "pdi": {
                 "included": bool(pdi),
                 "updated_at": pdi.get('updated_at') if pdi else None,
+                "excerpt": _extract_entry_excerpt(pdi) if pdi else '',
             },
             "linked_peis": {
                 "included": len(linked_peis) > 0,
@@ -719,9 +875,11 @@ def get_pei_sources_preview():
                     {
                         "id": item.get('id'),
                         "created_at": item.get('created_at'),
+                        "excerpt": _truncate_excerpt(((_pei_storage.get(item.get('id')) or item).get('markdown') or ''), max_length=600),
                     }
                     for item in linked_peis
                 ],
+                "excerpt": _truncate_excerpt(((_pei_storage.get(linked_peis[0].get('id')) or linked_peis[0]).get('markdown') or ''), max_length=600) if linked_peis else '',
             },
         },
     })
@@ -730,6 +888,10 @@ def get_pei_sources_preview():
 def _extract_bearer_token() -> str:
     auth_header = request.headers.get('Authorization', '')
     if not auth_header.startswith('Bearer '):
+        if request.method == 'GET':
+            token = (request.args.get('token') or '').strip()
+            if token:
+                return token
         return ''
     return auth_header.split(' ', 1)[1].strip()
 
@@ -1034,6 +1196,40 @@ def _student_visible_to_user(student: Dict, user: Optional[Dict] = None) -> bool
     return False
 
 
+def _entry_visible_to_user(entry: Dict, user: Optional[Dict] = None) -> bool:
+    if not entry:
+        return False
+
+    u = user or _current_user()
+    role = (u.get('role') or '').strip().lower()
+    if _is_global_user(u):
+        return True
+
+    if role in PROFESSOR_ROLES:
+        candidate_names = {
+            (u.get('name') or '').strip().lower(),
+            (u.get('username') or '').strip().lower(),
+        }
+        candidate_names = {value for value in candidate_names if value}
+        entry_teachers = entry.get('teachers') or []
+        if not isinstance(entry_teachers, list):
+            entry_teachers = []
+        entry_teachers = {
+            str(value).strip().lower()
+            for value in entry_teachers
+            if str(value).strip()
+        }
+        if candidate_names and entry_teachers.intersection(candidate_names):
+            return True
+
+    entry_student_id = (entry.get('student_id') or '').strip()
+    if entry_student_id:
+        student = _get_student_record(entry_student_id)
+        return bool(student and _student_visible_to_user(student, u))
+
+    return _student_name_visible_to_user(entry.get('student_name') or '', u)
+
+
 def _teacher_visible_to_user(teacher: Dict, user: Optional[Dict] = None) -> bool:
     if not teacher:
         return False
@@ -1194,6 +1390,71 @@ def _chat_history_repo():
     if not _is_postgres_available():
         return None
     return _postgres_repositories.get('chat_history')
+
+
+def _build_chat_subject_key(student_id: str, student_name: str) -> str:
+    if (student_id or '').strip():
+        return f"student:{(student_id or '').strip()}"
+    normalized_name = _normalize_student_name(student_name)
+    if normalized_name:
+        return f"student_name:{normalized_name}"
+    return 'global'
+
+
+def _build_canonical_chat_session_id(user_id: str, student_id: str, student_name: str) -> str:
+    user_key = (user_id or '').strip() or 'anonymous'
+    subject_key = _build_chat_subject_key(student_id, student_name)
+    namespace_value = f"{user_key}::{subject_key}"
+    return f"chat_{uuid.uuid5(uuid.NAMESPACE_DNS, namespace_value)}"
+
+
+def _resolve_chat_session_id(
+    user_id: str,
+    student_id: str,
+    student_name: str,
+    provided_session_id: str = '',
+    new_session: bool = False,
+    provided_new_session_id: str = '',
+) -> str:
+    explicit_session_id = (provided_session_id or '').strip()
+    if explicit_session_id:
+        return explicit_session_id
+
+    canonical_session_id = _build_canonical_chat_session_id(user_id, student_id, student_name)
+    if new_session:
+        custom_new_session_id = (provided_new_session_id or '').strip()
+        if custom_new_session_id:
+            return custom_new_session_id
+        return f"{canonical_session_id}__{now_brasilia_filename()}"
+    return canonical_session_id
+
+
+def _build_recent_chat_history_context(messages: List[Dict], max_messages: int = 20) -> str:
+    if not messages:
+        return ''
+
+    history_rows: List[str] = []
+    selected_messages = [
+        item
+        for item in messages
+        if (item.get('role') or '').strip() in {'user', 'assistant'}
+    ]
+    selected_messages = selected_messages[-max_messages:]
+
+    for item in selected_messages:
+        role = (item.get('role') or '').strip().lower()
+        role_label = 'Usuario' if role == 'user' else 'Assistente'
+        content = str(item.get('content') or '').strip()
+        if not content:
+            continue
+        if len(content) > 1500:
+            content = f"{content[:1500]}..."
+        history_rows.append(f"{role_label}: {content}")
+
+    if not history_rows:
+        return ''
+
+    return 'Historico recente da conversa (ultimas 20 mensagens):\n' + '\n'.join(history_rows)
 
 
 def _extract_school_city(school_record: Dict) -> str:
@@ -2018,16 +2279,7 @@ def get_student_entries(student_name):
             return _scope_forbidden()
 
         entries = _read_with_optional_fallback('diary', _diary_storage, 'get_entries_by_student', student_name)
-        visible_entries = []
-        for entry in entries:
-            entry_student_id = (entry.get('student_id') or '').strip()
-            if entry_student_id:
-                student = _get_student_record(entry_student_id)
-                if student and _student_visible_to_user(student):
-                    visible_entries.append(entry)
-                continue
-            if _student_name_visible_to_user(entry.get('student_name') or ''):
-                visible_entries.append(entry)
+        visible_entries = [entry for entry in entries if _entry_visible_to_user(entry)]
         return jsonify(visible_entries)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2079,7 +2331,7 @@ def create_diary_entry():
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
     
-    required_fields = ['student_name', 'teachers', 'diary_date', 'answers']
+    required_fields = ['student_name', 'teachers', 'diary_date', 'answers', 'attendance']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
@@ -2116,6 +2368,15 @@ def create_diary_entry():
         if not isinstance(parse_warnings, list):
             return jsonify({"error": "parse_warnings deve ser uma lista"}), 400
 
+        attendance = (data.get('attendance') or '').strip().lower()
+        absence_explanation = data.get('absence_explanation', '')
+        if attendance not in {'presente', 'falta_justificada', 'falta_injustificada'}:
+            return jsonify({"error": "Presenca invalida. Use presente, falta_justificada ou falta_injustificada"}), 400
+        if attendance == 'falta_justificada' and not str(absence_explanation or '').strip():
+            return jsonify({"error": "Motivo da falta justificada e obrigatorio"}), 400
+        if attendance != 'falta_justificada':
+            absence_explanation = ''
+
         warnings = copy.deepcopy(parse_warnings)
         has_conflict = _read_with_optional_fallback(
             'diary',
@@ -2128,13 +2389,22 @@ def create_diary_entry():
         if has_conflict:
             warnings.append('Já existe registro para o mesmo aluno e data')
 
+        answers = data.get('answers', {})
+        if attendance == 'presente':
+            if not isinstance(answers, dict) or not answers:
+                return jsonify({"error": "Respostas do diário são obrigatórias"}), 400
+        else:
+            answers = {}
+
         if _is_postgres_mode():
             entry = _postgres_repositories['diary'].save_entry(
                 student_name=student_name,
                 teachers=data['teachers'],
                 diary_date=data['diary_date'],
-                answers=data['answers'],
+                answers=answers,
                 open_obs=data.get('open_obs', ''),
+                attendance=attendance,
+                absence_explanation=absence_explanation,
                 student_id=student_id,
                 status=status,
                 source=source,
@@ -2145,8 +2415,10 @@ def create_diary_entry():
                 student_name=student_name,
                 teachers=data['teachers'],
                 diary_date=data['diary_date'],
-                answers=data['answers'],
+                answers=answers,
                 open_obs=data.get('open_obs', ''),
+                attendance=attendance,
+                absence_explanation=absence_explanation,
                 student_id=student_id,
                 status=status,
                 source=source,
@@ -2157,8 +2429,10 @@ def create_diary_entry():
                     student_name=student_name,
                     teachers=data['teachers'],
                     diary_date=data['diary_date'],
-                    answers=data['answers'],
+                    answers=answers,
                     open_obs=data.get('open_obs', ''),
+                    attendance=attendance,
+                    absence_explanation=absence_explanation,
                     student_id=student_id,
                     status=status,
                     source=source,
@@ -2183,12 +2457,7 @@ def get_diary_entry(entry_id):
         if not entry:
             return jsonify({"error": "Entrada não encontrada"}), 404
 
-        entry_student_id = (entry.get('student_id') or '').strip()
-        if entry_student_id:
-            student = _get_student_record(entry_student_id)
-            if not student or not _student_visible_to_user(student):
-                return _scope_forbidden()
-        elif not _student_name_visible_to_user(entry.get('student_name') or ''):
+        if not _entry_visible_to_user(entry):
             return _scope_forbidden()
 
         return jsonify(entry)
@@ -2238,15 +2507,29 @@ def update_diary_entry(entry_id):
             return jsonify({"error": "Data do registro é obrigatória"}), 400
 
         answers = data.get('answers', existing_entry.get('answers', {}))
-        if not isinstance(answers, dict) or not answers:
-            return jsonify({"error": "Respostas do diário são obrigatórias"}), 400
+        if attendance == 'presente':
+            if not isinstance(answers, dict) or not answers:
+                return jsonify({"error": "Respostas do diário são obrigatórias"}), 400
+        else:
+            answers = {}
 
         open_obs = data.get('open_obs', existing_entry.get('open_obs', ''))
+        attendance = (data.get('attendance') or existing_entry.get('attendance') or 'presente').strip().lower()
+        absence_explanation = data.get('absence_explanation', existing_entry.get('absence_explanation', ''))
         status = (data.get('status') or existing_entry.get('status') or 'final').strip().lower()
         source = (data.get('source') or existing_entry.get('source') or 'manual').strip().lower()
         parse_warnings = data.get('parse_warnings', existing_entry.get('parse_warnings', []))
         if not isinstance(parse_warnings, list):
             return jsonify({"error": "parse_warnings deve ser uma lista"}), 400
+
+        if attendance not in {'presente', 'falta_justificada', 'falta_injustificada'}:
+            return jsonify({"error": "Presenca invalida. Use presente, falta_justificada ou falta_injustificada"}), 400
+        if attendance == 'falta_justificada' and not str(absence_explanation or '').strip():
+            return jsonify({"error": "Motivo da falta justificada e obrigatorio"}), 400
+        if attendance != 'falta_justificada':
+            absence_explanation = ''
+        if attendance != 'presente':
+            open_obs = ''
 
         same_student_entries = _read_with_optional_fallback(
             'diary',
@@ -2270,6 +2553,8 @@ def update_diary_entry(entry_id):
                 diary_date=diary_date,
                 answers=answers,
                 open_obs=open_obs,
+                attendance=attendance,
+                absence_explanation=absence_explanation,
                 student_id=student_id,
                 status=status,
                 source=source,
@@ -2283,6 +2568,8 @@ def update_diary_entry(entry_id):
                 diary_date=diary_date,
                 answers=answers,
                 open_obs=open_obs,
+                attendance=attendance,
+                absence_explanation=absence_explanation,
                 student_id=student_id,
                 status=status,
                 source=source,
@@ -2296,6 +2583,8 @@ def update_diary_entry(entry_id):
                     diary_date=diary_date,
                     answers=answers,
                     open_obs=open_obs,
+                    attendance=attendance,
+                    absence_explanation=absence_explanation,
                     student_id=student_id,
                     status=status,
                     source=source,
@@ -2328,16 +2617,178 @@ def delete_diary_entry(entry_id):
         elif not _student_name_visible_to_user(entry.get('student_name') or ''):
             return _scope_forbidden()
 
+        deleted = False
         if _is_postgres_mode():
             deleted = _postgres_repositories['diary'].delete_entry(entry_id)
+        elif _is_dual_mode():
+            deleted = _postgres_repositories['diary'].delete_entry(entry_id) or deleted
+            deleted = _diary_storage.delete_entry(entry_id) or deleted
         else:
             deleted = _diary_storage.delete_entry(entry_id)
-            if _is_dual_mode() and deleted:
-                _postgres_repositories['diary'].delete_entry(entry_id)
 
         return jsonify({"message": "Entrada removida com sucesso"}) if deleted else jsonify({"error": "Entrada não encontrada"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _ensure_diary_entry_visible(entry_id: str) -> Optional[Dict]:
+    entry = _read_with_optional_fallback('diary', _diary_storage, 'get_entry', entry_id)
+    if not entry:
+        return None
+
+    if not _entry_visible_to_user(entry):
+        return None
+
+    return entry
+
+
+@app.route('/api/diary/entries/<entry_id>/images', methods=['POST'])
+def upload_diary_images(entry_id):
+    """Upload de imagens vinculadas a uma entrada de diario."""
+    if not _can_edit_learning_records(_current_role()):
+        return _scope_forbidden('Somente admin ou professor podem anexar imagens')
+
+    entry = _ensure_diary_entry_visible(entry_id)
+    if not entry:
+        return jsonify({"error": "Entrada não encontrada"}), 404
+
+    files = request.files.getlist('files')
+    if not files:
+        files = list(request.files.values())
+
+    if not files:
+        return jsonify({"error": "Nenhuma imagem enviada"}), 400
+
+    uploaded = []
+    for file in files:
+        if not file or not file.filename:
+            continue
+
+        filename = secure_filename(file.filename)
+        content_type = (file.mimetype or '').strip() or 'application/octet-stream'
+        if not content_type.startswith('image/'):
+            return jsonify({"error": "Apenas imagens são permitidas"}), 400
+
+        file_bytes = file.read()
+        if not file_bytes:
+            continue
+
+        image_id = str(uuid.uuid4())
+        extension = os.path.splitext(filename)[1]
+        if not extension:
+            extension = mimetypes.guess_extension(content_type) or ''
+
+        object_key = f'diary/{entry_id}/{image_id}{extension}'
+        _object_storage.upload_file(
+            bucket=DIARY_IMAGES_BUCKET,
+            object_key=object_key,
+            content=file_bytes,
+            content_type=content_type,
+        )
+
+        _upsert_object_metadata(
+            doc_type=DIARY_IMAGE_DOC_TYPE,
+            reference_id=image_id,
+            bucket=DIARY_IMAGES_BUCKET,
+            object_key=object_key,
+            original_filename=filename or f'{image_id}{extension}',
+            mime_type=content_type,
+            size_bytes=len(file_bytes),
+            extra={
+                'diary_entry_id': entry_id,
+                'student_id': entry.get('student_id') or '',
+                'student_name': entry.get('student_name') or '',
+            },
+        )
+
+        uploaded.append({
+            'image_id': image_id,
+            'file_name': filename,
+            'mime_type': content_type,
+            'size_bytes': len(file_bytes),
+        })
+
+    if not uploaded:
+        return jsonify({"error": "Nenhuma imagem válida enviada"}), 400
+
+    return jsonify({
+        'message': 'Imagens anexadas com sucesso',
+        'images': uploaded,
+    }), 201
+
+
+@app.route('/api/diary/entries/<entry_id>/images', methods=['GET'])
+def list_diary_images(entry_id):
+    """Lista imagens vinculadas a uma entrada de diario."""
+    entry = _ensure_diary_entry_visible(entry_id)
+    if not entry:
+        return jsonify({"error": "Entrada não encontrada"}), 404
+
+    files = _list_object_metadata(DIARY_IMAGE_DOC_TYPE, DIARY_IMAGES_BUCKET)
+    results = []
+    for file_meta in files:
+        extra = file_meta.get('extra') or {}
+        if str(extra.get('diary_entry_id') or '') != str(entry_id):
+            continue
+        results.append({
+            'image_id': file_meta.get('reference_id'),
+            'file_name': file_meta.get('original_filename'),
+            'mime_type': file_meta.get('mime_type'),
+            'size_bytes': file_meta.get('size_bytes'),
+            'created_at': file_meta.get('created_at'),
+            'view_url': f"/api/diary/images/{file_meta.get('reference_id')}",
+        })
+
+    return jsonify(results)
+
+
+@app.route('/api/diary/images/<image_id>', methods=['GET'])
+def get_diary_image(image_id):
+    """Serve uma imagem anexada ao diario."""
+    file_meta = _get_object_metadata(DIARY_IMAGE_DOC_TYPE, image_id)
+    if not file_meta:
+        return jsonify({"error": "Imagem não encontrada"}), 404
+
+    extra = file_meta.get('extra') or {}
+    entry_id = extra.get('diary_entry_id') or ''
+    entry = _ensure_diary_entry_visible(entry_id)
+    if not entry:
+        return _scope_forbidden()
+
+    object_key = file_meta.get('object_key')
+    try:
+        file_bytes = _object_storage.download_file(DIARY_IMAGES_BUCKET, object_key)
+    except FileNotFoundError:
+        return jsonify({"error": "Imagem não disponível"}), 404
+
+    return send_file(
+        BytesIO(file_bytes),
+        mimetype=file_meta.get('mime_type') or 'image/*',
+        as_attachment=False,
+        download_name=file_meta.get('original_filename') or f'{image_id}',
+    )
+
+
+@app.route('/api/diary/images/<image_id>', methods=['DELETE'])
+def delete_diary_image(image_id):
+    """Remove uma imagem anexada ao diario."""
+    if not _can_edit_learning_records(_current_role()):
+        return _scope_forbidden('Somente admin ou professor podem remover imagens')
+
+    file_meta = _get_object_metadata(DIARY_IMAGE_DOC_TYPE, image_id)
+    if not file_meta:
+        return jsonify({"error": "Imagem não encontrada"}), 404
+
+    extra = file_meta.get('extra') or {}
+    entry_id = extra.get('diary_entry_id') or ''
+    entry = _ensure_diary_entry_visible(entry_id)
+    if not entry:
+        return _scope_forbidden()
+
+    object_key = file_meta.get('object_key')
+    _object_storage.delete_file(DIARY_IMAGES_BUCKET, object_key)
+    _delete_object_metadata(DIARY_IMAGE_DOC_TYPE, image_id)
+    return jsonify({"message": "Imagem removida com sucesso"})
 
 
 @app.route('/api/diary/last-teachers/<student_name>', methods=['GET'])
@@ -2617,6 +3068,19 @@ def get_all_pdis():
         filtered = []
         for pdi in pdis:
             student_id = (pdi.get('student_id') or '').strip()
+            if not str(pdi.get('student_grade') or '').strip():
+                student_grade = ''
+                if student_id:
+                    student = _get_student_record(student_id)
+                    if student:
+                        student_grade = student.get('grade') or student.get('schoolYear') or ''
+                elif pdi.get('student_name'):
+                    matches = _find_students_by_name(pdi.get('student_name') or '')
+                    if matches:
+                        student_grade = matches[0].get('grade') or matches[0].get('schoolYear') or ''
+                if student_grade:
+                    pdi['student_grade'] = student_grade
+
             if student_id:
                 student = _get_student_record(student_id)
                 if student and _student_visible_to_user(student):
@@ -2750,6 +3214,12 @@ def create_pdi():
         if not student_name:
             return jsonify({"error": "Aluno selecionado não possui nome válido"}), 400
 
+        student_grade = student.get('grade') or student.get('schoolYear') or data.get('student_grade') or data.get('grade') or ''
+        normalized_trimesters = normalize_trimesters(
+            data['trimesters'],
+            subject_ids=get_pdi_subject_ids_for_grade(student_grade),
+        )
+
         if _is_postgres_mode():
             _postgres_repositories['pdi'].link_pdis_to_student(student_id, student_name)
         else:
@@ -2775,8 +3245,9 @@ def create_pdi():
                 diagnosis=data['diagnosis'],
                 class_name=data['class'],
                 teachers=data['teachers'],
-                trimesters=data['trimesters'],
+                trimesters=normalized_trimesters,
                 student_id=student_id,
+                student_grade=student_grade,
             )
         else:
             pdi = _pdi_storage.save_pdi(
@@ -2786,8 +3257,9 @@ def create_pdi():
                 diagnosis=data['diagnosis'],
                 class_name=data['class'],
                 teachers=data['teachers'],
-                trimesters=data['trimesters'],
+                trimesters=normalized_trimesters,
                 student_id=student_id,
+                student_grade=student_grade,
             )
             if _is_dual_mode():
                 _postgres_repositories['pdi'].save_pdi(
@@ -2797,8 +3269,9 @@ def create_pdi():
                     diagnosis=data['diagnosis'],
                     class_name=data['class'],
                     teachers=data['teachers'],
-                    trimesters=data['trimesters'],
+                    trimesters=normalized_trimesters,
                     student_id=student_id,
+                    student_grade=student_grade,
                     pdi_id=pdi.get('id'),
                     created_at=pdi.get('created_at'),
                     updated_at=pdi.get('updated_at'),
@@ -2862,6 +3335,12 @@ def update_pdi(pdi_id):
         if not student_name:
             return jsonify({"error": "Aluno selecionado não possui nome válido"}), 400
 
+        student_grade = student.get('grade') or student.get('schoolYear') or data.get('student_grade') or data.get('grade') or ''
+        normalized_trimesters = normalize_trimesters(
+            data['trimesters'],
+            subject_ids=get_pdi_subject_ids_for_grade(student_grade),
+        )
+
         has_pdi = _read_with_optional_fallback(
             'pdi',
             _pdi_storage,
@@ -2882,8 +3361,9 @@ def update_pdi(pdi_id):
                 diagnosis=data['diagnosis'],
                 class_name=data['class'],
                 teachers=data['teachers'],
-                trimesters=data['trimesters'],
+                trimesters=normalized_trimesters,
                 student_id=student_id,
+                student_grade=student_grade,
             )
         else:
             pdi = _pdi_storage.update_pdi(
@@ -2894,8 +3374,9 @@ def update_pdi(pdi_id):
                 diagnosis=data['diagnosis'],
                 class_name=data['class'],
                 teachers=data['teachers'],
-                trimesters=data['trimesters'],
+                trimesters=normalized_trimesters,
                 student_id=student_id,
+                student_grade=student_grade,
             )
             if _is_dual_mode() and pdi:
                 _postgres_repositories['pdi'].update_pdi(
@@ -2906,8 +3387,9 @@ def update_pdi(pdi_id):
                     diagnosis=data['diagnosis'],
                     class_name=data['class'],
                     teachers=data['teachers'],
-                    trimesters=data['trimesters'],
+                    trimesters=normalized_trimesters,
                     student_id=student_id,
+                    student_grade=student_grade,
                 )
         
         return jsonify({
@@ -3219,6 +3701,12 @@ def create_student():
     data['teacher_name'] = resolved_teacher_names[0] if resolved_teacher_names else ''
 
     data['school_name'] = school.get('name', '')
+    # Validação do campo 'grade' obrigatório e pertencente à lista canônica
+    grade_value = str(data.get('grade', '')).strip()
+    if not grade_value:
+        return jsonify({"error": "Selecione o ano escolar do aluno"}), 400
+    if grade_value not in ALLOWED_GRADES:
+        return jsonify({"error": "Ano escolar inválido"}), 400
     
     try:
         if _is_postgres_mode():
@@ -3309,6 +3797,13 @@ def update_student(student_id):
         data['teachers'] = resolved_teacher_names
         data['teacher_id'] = teacher_ids[0]
         data['teacher_name'] = resolved_teacher_names[0] if resolved_teacher_names else ''
+    # Se está sendo atualizada a série/ano, validar o valor
+    if 'grade' in data:
+        grade_value = str(data.get('grade', '')).strip()
+        if not grade_value:
+            return jsonify({"error": "Selecione o ano escolar do aluno"}), 400
+        if grade_value not in ALLOWED_GRADES:
+            return jsonify({"error": "Ano escolar inválido"}), 400
     
     try:
         if _is_postgres_mode():
@@ -3823,17 +4318,30 @@ def rag_chat():
                 student_id=student_id,
                 max_diary_entries=3,
                 selected_sources=selected_sources,
+                engine=engine,
             )
 
         session_date = (data.get('session_date') or '').strip() or now_brasilia_iso()[:10]
-        user_id = (getattr(g, 'current_user', {}) or {}).get('id') or 'anonymous'
-        session_subject = student_id or student_name or 'global'
-        session_id = (data.get('session_id') or '').strip()
-        if not session_id:
-            if new_session:
-                session_id = str(data.get('new_session_id') or '').strip() or f"{user_id}__{session_subject}__{session_date}__{now_brasilia_filename()}"
-            else:
-                session_id = f"{user_id}__{session_subject}__{session_date}"
+        current_user = (getattr(g, 'current_user', None) or {})
+        user_id = current_user.get('id') or 'anonymous'
+        session_id = _resolve_chat_session_id(
+            user_id=user_id,
+            student_id=student_id,
+            student_name=student_name,
+            provided_session_id=data.get('session_id', ''),
+            new_session=new_session,
+            provided_new_session_id=data.get('new_session_id', ''),
+        )
+
+        chat_repo = _chat_history_repo()
+        if chat_repo and current_user:
+            existing_messages = chat_repo.list_messages(session_id)
+            history_context = _build_recent_chat_history_context(existing_messages, max_messages=20)
+            if history_context:
+                if integrated_context:
+                    integrated_context = f"{history_context}\n\n---\n\n{integrated_context}"
+                else:
+                    integrated_context = history_context
 
         result = engine.query(
             message=message,
@@ -3844,15 +4352,13 @@ def rag_chat():
             system_prompt_chat=chat_prompt_data['prompt'],
         )
 
-        chat_repo = _chat_history_repo()
-        if chat_repo and getattr(g, 'current_user', None):
+        if chat_repo and current_user:
             scope = _resolve_chat_scope(
                 student_id=student_id,
                 student_name=student_name,
                 school_id=school_id,
                 school_name=school,
             )
-            current_user = g.current_user
 
             chat_repo.create_or_update_session(
                 session_id=session_id,
@@ -3935,6 +4441,84 @@ def get_chat_session_messages(session_id):
     return jsonify({'session': session_data, 'messages': messages, 'count': len(messages)})
 
 
+@app.route('/api/rag/chat/current-session', methods=['GET'])
+def get_current_chat_session():
+    """Retorna sessão canônica e mensagens para aluno + usuário logado."""
+    repo = _chat_history_repo()
+    if not repo:
+        return jsonify({'error': 'Histórico indisponível sem PostgreSQL/Supabase ativo'}), 503
+
+    student_id = (request.args.get('student_id') or '').strip()
+    student_name = (request.args.get('student_name') or '').strip()
+    school = (request.args.get('school') or '').strip()
+
+    if student_id:
+        student = _get_student_record(student_id)
+        if not student:
+            return jsonify({'error': 'Aluno não encontrado'}), 404
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
+        student_name = _student_name_from_record(student) or student_name
+        school = _student_school_from_record(student) or school
+    elif student_name and not _student_name_visible_to_user(student_name):
+        return _scope_forbidden()
+
+    current_user = (getattr(g, 'current_user', None) or {})
+    session_id = _resolve_chat_session_id(
+        user_id=current_user.get('id') or 'anonymous',
+        student_id=student_id,
+        student_name=student_name,
+    )
+
+    session_data = repo.get_session(session_id)
+    if not session_data:
+        return jsonify({'session_id': session_id, 'session': None, 'messages': [], 'count': 0})
+
+    if not _can_access_chat_session(session_data, g.current_user):
+        return jsonify({'error': 'Acesso negado para este histórico'}), 403
+
+    messages = repo.list_messages(session_id)
+    return jsonify({'session_id': session_id, 'session': session_data, 'messages': messages, 'count': len(messages)})
+
+
+@app.route('/api/rag/chat/current-session', methods=['DELETE'])
+def reset_current_chat_session():
+    """Remove a sessão canônica (histórico) do aluno para o usuário logado."""
+    repo = _chat_history_repo()
+    if not repo:
+        return jsonify({'error': 'Histórico indisponível sem PostgreSQL/Supabase ativo'}), 503
+
+    payload = request.json or {}
+    student_id = (payload.get('student_id') or request.args.get('student_id') or '').strip()
+    student_name = (payload.get('student_name') or request.args.get('student_name') or '').strip()
+    school = (payload.get('school') or request.args.get('school') or '').strip()
+
+    if student_id:
+        student = _get_student_record(student_id)
+        if not student:
+            return jsonify({'error': 'Aluno não encontrado'}), 404
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
+        student_name = _student_name_from_record(student) or student_name
+        school = _student_school_from_record(student) or school
+    elif student_name and not _student_name_visible_to_user(student_name):
+        return _scope_forbidden()
+
+    current_user = (getattr(g, 'current_user', None) or {})
+    session_id = _resolve_chat_session_id(
+        user_id=current_user.get('id') or 'anonymous',
+        student_id=student_id,
+        student_name=student_name,
+    )
+
+    session_data = repo.get_session(session_id)
+    if session_data and not _can_access_chat_session(session_data, g.current_user):
+        return jsonify({'error': 'Acesso negado para este histórico'}), 403
+
+    deleted = repo.delete_session(session_id)
+    return jsonify({'ok': True, 'deleted': bool(deleted), 'session_id': session_id})
+
+
 @app.route('/api/rag/chat/history-by-day', methods=['GET'])
 def list_chat_history_by_day():
     """Retorna sessões agrupadas por dia conforme escopo do usuário."""
@@ -4008,6 +4592,7 @@ def generate_pei():
             student_name=student_name,
             student_id=student_id,
             selected_sources=selected_sources,
+            engine=engine,
         )
         result = engine.generate_pei(
             student_name=student_name,

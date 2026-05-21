@@ -31,6 +31,7 @@ class LocalObjectStorage(BaseObjectStorage):
 
     def upload_file(self, bucket: str, object_key: str, content: bytes, content_type: str):
         target_path = self._resolve_path(bucket, object_key)
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
         with open(target_path, 'wb') as file_obj:
             file_obj.write(content)
 

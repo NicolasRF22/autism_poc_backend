@@ -305,7 +305,7 @@ class VectorStore:
         }
 
         try:
-            results = self.collection.get(where=where_filter, include=["metadatas"])
+            results = self.collection.get(where=where_filter, include=["metadatas", "documents"])
         except Exception:
             return {
                 "document_count": 0,
@@ -313,13 +313,16 @@ class VectorStore:
             }
 
         unique_docs: Dict[str, Dict] = {}
-        for metadata in results.get("metadatas", []):
+        metadatas = results.get("metadatas", [])
+        documents = results.get("documents", [])
+        for index, metadata in enumerate(metadatas):
             doc_id = metadata.get("doc_id")
             if doc_id and doc_id not in unique_docs:
                 unique_docs[doc_id] = {
                     "doc_id": doc_id,
                     "file_name": metadata.get("file_name", ""),
                     "upload_date": metadata.get("upload_date", ""),
+                    "excerpt": (documents[index] if index < len(documents) else "")[:360],
                 }
 
         documents = sorted(

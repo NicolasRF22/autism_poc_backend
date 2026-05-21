@@ -6,6 +6,7 @@ import unicodedata
 from typing import List, Dict, Optional
 
 from time_utils import now_brasilia_iso
+from pdi_defaults import get_pdi_subject_ids_for_grade, normalize_trimesters
 
 
 class PDIStorage:
@@ -14,6 +15,7 @@ class PDIStorage:
         self.index_path = os.path.join(storage_dir, "index.json")
         os.makedirs(storage_dir, exist_ok=True)
         self._index: List[Dict] = self._load_index()
+        self._normalize_existing_pdis()
 
     # ------------------------------------------------------------------
     # Index
@@ -23,6 +25,20 @@ class PDIStorage:
             with open(self.index_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         return []
+
+    def _normalize_existing_pdis(self):
+        changed = False
+        for pdi in self._index:
+            normalized_trimesters = normalize_trimesters(
+                pdi.get('trimesters'),
+                subject_ids=get_pdi_subject_ids_for_grade(pdi.get('student_grade') or pdi.get('grade')),
+            )
+            if normalized_trimesters != pdi.get('trimesters'):
+                pdi['trimesters'] = normalized_trimesters
+                changed = True
+
+        if changed:
+            self._save_index()
 
     def _save_index(self):
         with open(self.index_path, "w", encoding="utf-8") as f:
@@ -56,19 +72,22 @@ class PDIStorage:
         teachers: List[str],
         trimesters: Dict,
         student_id: Optional[str] = None,
+        student_grade: Optional[str] = None,
     ) -> Dict:
         """Cria um novo PDI."""
+        subject_ids = get_pdi_subject_ids_for_grade(student_grade)
         pdi_id = str(uuid.uuid4())
         pdi = {
             "id": pdi_id,
             "student_id": student_id,
             "student_name": student_name,
+            "student_grade": student_grade or '',
             "birth_date": birth_date,
             "guardians": guardians,
             "diagnosis": diagnosis,
             "class": class_name,
             "teachers": teachers,
-            "trimesters": trimesters,
+            "trimesters": normalize_trimesters(trimesters, subject_ids=subject_ids),
             "created_at": now_brasilia_iso(),
             "updated_at": now_brasilia_iso(),
         }
@@ -87,21 +106,25 @@ class PDIStorage:
         teachers: List[str],
         trimesters: Dict,
         student_id: Optional[str] = None,
+        student_grade: Optional[str] = None,
     ) -> Optional[Dict]:
         """Atualiza um PDI existente."""
         pdi = self.get_pdi(pdi_id)
         if not pdi:
             return None
+
+        subject_ids = get_pdi_subject_ids_for_grade(student_grade or pdi.get('student_grade'))
         
         # Atualiza os campos
         pdi["student_id"] = student_id
         pdi["student_name"] = student_name
+        pdi["student_grade"] = student_grade or ''
         pdi["birth_date"] = birth_date
         pdi["guardians"] = guardians
         pdi["diagnosis"] = diagnosis
         pdi["class"] = class_name
         pdi["teachers"] = teachers
-        pdi["trimesters"] = trimesters
+        pdi["trimesters"] = normalize_trimesters(trimesters, subject_ids=subject_ids)
         pdi["updated_at"] = now_brasilia_iso()
         
         self._save_index()
@@ -139,6 +162,7 @@ class PDIStorage:
                 "id": pdi["id"],
                 "student_id": pdi.get("student_id"),
                 "student_name": pdi["student_name"],
+                "student_grade": pdi.get("student_grade", pdi.get("grade", "")),
                 "class": pdi["class"],
                 "diagnosis": pdi["diagnosis"],
                 "updated_at": pdi["updated_at"],

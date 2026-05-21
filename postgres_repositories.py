@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import JSON, Integer, String, Text, UniqueConstraint, create_engine, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
+from pdi_defaults import get_pdi_subject_ids_for_grade, normalize_trimesters
 from time_utils import now_brasilia_iso
 
 
@@ -792,6 +793,8 @@ class DiaryPostgresRepository(_BaseRepository):
         diary_date: str,
         answers: Dict,
         open_obs: str,
+        attendance: str = 'presente',
+        absence_explanation: str = '',
         student_id: Optional[str] = None,
         status: str = 'final',
         source: str = 'manual',
@@ -811,6 +814,8 @@ class DiaryPostgresRepository(_BaseRepository):
             'diary_date': diary_date,
             'answers': answers,
             'open_obs': open_obs,
+            'attendance': attendance,
+            'absence_explanation': absence_explanation,
             'status': status,
             'source': source,
             'parse_warnings': parse_warnings or [],
@@ -860,6 +865,8 @@ class DiaryPostgresRepository(_BaseRepository):
         diary_date: str,
         answers: Dict,
         open_obs: str,
+        attendance: str = 'presente',
+        absence_explanation: str = '',
         student_id: Optional[str] = None,
         status: str = 'final',
         source: str = 'manual',
@@ -878,6 +885,8 @@ class DiaryPostgresRepository(_BaseRepository):
                 'diary_date': diary_date,
                 'answers': answers,
                 'open_obs': open_obs,
+                'attendance': attendance,
+                'absence_explanation': absence_explanation,
                 'status': status,
                 'source': source,
                 'parse_warnings': parse_warnings or [],
@@ -1000,6 +1009,7 @@ class PDIPostgresRepository(_BaseRepository):
         teachers: List[str],
         trimesters: Dict,
         student_id: Optional[str] = None,
+        student_grade: Optional[str] = None,
         pdi_id: Optional[str] = None,
         created_at: Optional[str] = None,
         updated_at: Optional[str] = None,
@@ -1017,7 +1027,11 @@ class PDIPostgresRepository(_BaseRepository):
             'diagnosis': diagnosis,
             'class': class_name,
             'teachers': teachers,
-            'trimesters': trimesters,
+            'student_grade': student_grade or '',
+            'trimesters': normalize_trimesters(
+                trimesters,
+                subject_ids=get_pdi_subject_ids_for_grade(student_grade),
+            ),
         }
 
         with self._session() as session:
@@ -1041,14 +1055,15 @@ class PDIPostgresRepository(_BaseRepository):
         teachers: List[str],
         trimesters: Dict,
         student_id: Optional[str] = None,
+        student_grade: Optional[str] = None,
     ) -> Optional[Dict]:
         with self._session() as session:
             record = session.get(PDIRecord, pdi_id)
             if not record:
                 return None
 
-            record.payload = {
-                **dict(record.payload or {}),
+            payload = dict(record.payload or {})
+            payload.update({
                 'student_id': student_id,
                 'student_name': student_name,
                 'birth_date': birth_date,
@@ -1056,10 +1071,35 @@ class PDIPostgresRepository(_BaseRepository):
                 'diagnosis': diagnosis,
                 'class': class_name,
                 'teachers': teachers,
-                'trimesters': trimesters,
-            }
+                'student_grade': student_grade or payload.get('student_grade') or '',
+                'trimesters': normalize_trimesters(
+                    trimesters,
+                    subject_ids=get_pdi_subject_ids_for_grade(student_grade or payload.get('student_grade')),
+                ),
+            })
+            record.payload = payload
             record.updated_at = now_brasilia_iso()
             return self._to_entity(record)
+
+    def normalize_existing_pdis(self) -> int:
+        updated_count = 0
+        with self._session() as session:
+            rows = session.execute(select(PDIRecord)).scalars().all()
+            for row in rows:
+                payload = dict(row.payload or {})
+                normalized_trimesters = normalize_trimesters(
+                    payload.get('trimesters'),
+                    subject_ids=get_pdi_subject_ids_for_grade(payload.get('student_grade')),
+                )
+                if normalized_trimesters == payload.get('trimesters'):
+                    continue
+
+                payload['trimesters'] = normalized_trimesters
+                row.payload = payload
+                row.updated_at = now_brasilia_iso()
+                updated_count += 1
+
+        return updated_count
 
     def get_pdi(self, pdi_id: str) -> Optional[Dict]:
         return self._get(pdi_id)
@@ -1093,6 +1133,7 @@ class PDIPostgresRepository(_BaseRepository):
                 'id': pdi['id'],
                 'student_id': pdi.get('student_id'),
                 'student_name': pdi.get('student_name', ''),
+                'student_grade': pdi.get('student_grade', pdi.get('grade', '')),
                 'class': pdi.get('class', ''),
                 'diagnosis': pdi.get('diagnosis', ''),
                 'updated_at': pdi.get('updated_at', ''),
