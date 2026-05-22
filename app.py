@@ -171,7 +171,13 @@ def _build_source_evidence_block(
 
 app = Flask(__name__)
 DEBUG_MODE = _to_bool(os.getenv('DEBUG', 'False'), default=False)
-CORS(app, resources={r'/api/*': {'origins': _parse_cors_origins()}})
+CORS(app, resources={r'/api/*': {
+    'origins': _parse_cors_origins(),
+    'max_age': 600,                          # browser cacheia o preflight por 10 min
+    'supports_credentials': False,           # sem cookies — só Authorization header
+    'allow_headers': ['Authorization', 'Content-Type', 'Accept'],
+    'methods': ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+}})
 
 # ------------------------------------------------------------------
 # RAG Engine (inicializado sob demanda para evitar falha sem API key)
@@ -999,10 +1005,12 @@ def _sync_legacy_diary_links_for_repo(repo, students: List[Dict]) -> int:
 
 
 def _sync_legacy_diary_links() -> int:
-    students = _list_student_summaries()
+    # Em modo postgres os vínculos são mantidos pela coluna FK student_id,
+    # populada na migração e em cada create/update. Sync por nome é desnecessário.
     if _is_postgres_mode():
-        return _sync_legacy_diary_links_for_repo(_postgres_repositories['diary'], students)
+        return 0
 
+    students = _list_student_summaries()
     linked = _sync_legacy_diary_links_for_repo(_diary_storage, students)
     if _is_dual_mode():
         linked += _sync_legacy_diary_links_for_repo(_postgres_repositories['diary'], students)
@@ -1010,6 +1018,10 @@ def _sync_legacy_diary_links() -> int:
 
 
 def _sync_legacy_pdi_links() -> int:
+    # Mesmo motivo: em modo postgres a coluna FK student_id já está populada.
+    if _is_postgres_mode():
+        return 0
+
     students = _list_student_summaries()
 
     def _sync_repo(repo):
@@ -1156,6 +1168,29 @@ def _get_professor_teacher_ids(user: Optional[Dict] = None) -> Set[str]:
                 ids.add(teacher_id)
 
     return ids
+
+
+def _build_scope_filter() -> Dict:
+    """
+    Monta o filtro de escopo para o usuário logado.
+    Para role professor faz no máximo 1 query (list_all_teachers) para resolver teacher_ids.
+    O resultado é passado diretamente para os métodos *_by_scope dos repositórios.
+    """
+    user = _current_user()
+    role = (user.get('role') or '').strip().lower()
+    school_id = (user.get('school_id') or '').strip()
+    municipio_id = (user.get('municipio_id') or '').strip()
+
+    teacher_ids: List[str] = []
+    if role in PROFESSOR_ROLES:
+        teacher_ids = list(_get_professor_teacher_ids(user))
+
+    return {
+        'role': role,
+        'school_id': school_id,
+        'municipio_id': municipio_id,
+        'teacher_ids': teacher_ids,
+    }
 
 
 def _student_visible_to_user(student: Dict, user: Optional[Dict] = None) -> bool:
@@ -1541,6 +1576,13 @@ def _should_audit_request(path: str, method: str) -> bool:
     if method == 'OPTIONS':
         return False
     return True
+
+
+@app.before_request
+def handle_options_preflight():
+    """Responde preflights CORS imediatamente sem passar por auth ou DB."""
+    if request.method == 'OPTIONS':
+        return app.make_default_options_response()
 
 
 @app.before_request
@@ -2219,7 +2261,11 @@ def get_diary_students():
     """Lista todos os alunos com diários (com resumos)"""
     try:
         _sync_legacy_diary_links()
-        summaries = _read_with_optional_fallback('diary', _diary_storage, 'list_all_summaries')
+        if _read_from_postgres_first():
+            scope = _build_scope_filter()
+            summaries = _postgres_repositories['diary'].list_diary_summaries_by_scope(scope)
+            return jsonify(summaries)
+        summaries = _diary_storage.list_all_summaries()
         filtered = []
         for summary in summaries:
             student_id = (summary.get('student_id') or '').strip()
@@ -2230,7 +2276,6 @@ def get_diary_students():
                 continue
             if _student_name_visible_to_user(summary.get('student_name') or ''):
                 filtered.append(summary)
-
         return jsonify(filtered)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2241,25 +2286,18 @@ def get_available_diary_students():
     """Lista alunos cadastrados que ainda não possuem diário."""
     try:
         _sync_legacy_diary_links()
+        if _read_from_postgres_first():
+            scope = _build_scope_filter()
+            students = _postgres_repositories['student'].list_students_by_scope(scope)
+            diary_summaries = _postgres_repositories['diary'].list_diary_summaries_by_scope(scope)
+            used_ids = {(s.get('student_id') or '').strip() for s in diary_summaries}
+            return jsonify([s for s in students if (s.get('id') or '').strip() not in used_ids])
+
         students = _list_student_summaries()
-        diary_summaries = _read_with_optional_fallback('diary', _diary_storage, 'list_all_summaries')
-
-        used_student_ids = {
-            (summary.get('student_id') or '').strip()
-            for summary in diary_summaries
-            if (summary.get('student_id') or '').strip()
-        }
-
-        available_students = []
-        for student in students:
-            student_id = (student.get('id') or '').strip()
-
-            if student_id and student_id in used_student_ids:
-                continue
-
-            available_students.append(student)
-
-        return jsonify(_filter_students_by_scope(available_students))
+        diary_summaries = _diary_storage.list_all_summaries()
+        used_ids = {(s.get('student_id') or '').strip() for s in diary_summaries if s.get('student_id')}
+        available = [s for s in students if (s.get('id') or '').strip() not in used_ids]
+        return jsonify(_filter_students_by_scope(available))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -3064,7 +3102,12 @@ def get_all_pdis():
     """Lista todos os PDIs com informações resumidas"""
     try:
         _sync_legacy_pdi_links()
-        pdis = _read_with_optional_fallback('pdi', _pdi_storage, 'list_all_pdis')
+        if _read_from_postgres_first():
+            scope = _build_scope_filter()
+            pdis = _postgres_repositories['pdi'].list_pdis_by_scope(scope)
+            return jsonify(pdis)
+
+        pdis = _pdi_storage.list_all_pdis()
         filtered = []
         for pdi in pdis:
             student_id = (pdi.get('student_id') or '').strip()
@@ -3080,7 +3123,6 @@ def get_all_pdis():
                         student_grade = matches[0].get('grade') or matches[0].get('schoolYear') or ''
                 if student_grade:
                     pdi['student_grade'] = student_grade
-
             if student_id:
                 student = _get_student_record(student_id)
                 if student and _student_visible_to_user(student):
@@ -3098,6 +3140,13 @@ def get_available_pdi_students():
     """Lista alunos cadastrados que ainda não possuem PDI."""
     try:
         _sync_legacy_pdi_links()
+        if _read_from_postgres_first():
+            scope = _build_scope_filter()
+            students = _postgres_repositories['student'].list_students_by_scope(scope)
+            pdis = _postgres_repositories['pdi'].list_pdis_by_scope(scope)
+            used_ids = {(p.get('student_id') or '').strip() for p in pdis if p.get('student_id')}
+            return jsonify([s for s in students if (s.get('id') or '').strip() not in used_ids])
+
         students = _list_student_summaries()
         pdis = _read_with_optional_fallback('pdi', _pdi_storage, 'list_all_pdis')
 
@@ -3440,9 +3489,9 @@ def get_all_schools():
     """Lista todas as escolas cadastradas"""
     try:
         if _read_from_postgres_first():
-            schools_pg = _postgres_repositories['school'].list_all_schools()
-            if schools_pg or _is_postgres_mode():
-                return jsonify(_filter_schools_by_scope(schools_pg))
+            scope = _build_scope_filter()
+            schools = _postgres_repositories['school'].list_schools_by_scope(scope)
+            return jsonify(schools)
         schools = _school_storage.list_all_schools()
         return jsonify(_filter_schools_by_scope(schools))
     except Exception as e:
@@ -3621,9 +3670,9 @@ def get_all_students():
     """Lista todos os alunos cadastrados"""
     try:
         if _read_from_postgres_first():
-            students_pg = _postgres_repositories['student'].list_all_students()
-            if students_pg or _is_postgres_mode():
-                return jsonify(_filter_students_by_scope(students_pg))
+            scope = _build_scope_filter()
+            students = _postgres_repositories['student'].list_students_by_scope(scope)
+            return jsonify(students)
         students = _student_storage.list_all_students()
         return jsonify(_filter_students_by_scope(students))
     except Exception as e:
@@ -3872,9 +3921,9 @@ def get_all_teachers():
     """Lista todos os docentes cadastrados."""
     try:
         if _read_from_postgres_first():
-            teachers_pg = _postgres_repositories['teacher'].list_all_teachers()
-            if teachers_pg or _is_postgres_mode():
-                return jsonify(_filter_teachers_by_scope(teachers_pg))
+            scope = _build_scope_filter()
+            teachers = _postgres_repositories['teacher'].list_teachers_by_scope(scope)
+            return jsonify(teachers)
         teachers = _teacher_storage.list_all_teachers()
         return jsonify(_filter_teachers_by_scope(teachers))
     except Exception as e:
