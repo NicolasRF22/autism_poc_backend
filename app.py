@@ -2868,6 +2868,9 @@ def upload_diary_images(entry_id):
     if not entry:
         return jsonify({"error": "Entrada não encontrada"}), 404
 
+    if (entry.get('attendance') or 'presente') != 'presente':
+        return jsonify({"error": "Imagens só podem ser anexadas em registros de presença"}), 400
+
     files = request.files.getlist('files')
     if not files:
         files = list(request.files.values())
