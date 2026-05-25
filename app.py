@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 import json
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 import orjson
 import jwt
 from werkzeug.utils import secure_filename
@@ -482,6 +482,14 @@ ADMIN_ONLY_PREFIXES = (
     '/api/auth/users',
     '/api/audit',
     '/api/admin',
+)
+
+AVALIADOR_BLOCKED_PREFIXES = (
+    '/api/rag/generate-pei',
+    '/api/rag/peis',
+    '/api/rag/pei-sources-preview',
+    '/api/rag/pei-prompt',
+    '/api/rag/chat-prompt',
 )
 
 MUTATING_METHODS = {'POST', 'PUT', 'DELETE', 'PATCH'}
@@ -1066,6 +1074,7 @@ def _sanitize_current_user(user: Dict) -> Dict:
         'municipio_id': user.get('municipio_id') or '',
         'school_id': user.get('school_id') or '',
         'teacher_id': user.get('teacher_id') or '',
+        'evaluator_scope': user.get('evaluator_scope') or {},
         'is_active': bool(user.get('is_active', True)),
         'created_at': user.get('created_at'),
         'updated_at': user.get('updated_at'),
@@ -1077,6 +1086,93 @@ SECRETARIA_ROLES = {'secretaria'}
 SCHOOL_STAFF_ROLES = {'coordenacao'}
 PROFESSOR_ROLES = {'professor'}
 VIEWER_ROLES = {'viewer'}
+AVALIADOR_ROLES = {'avaliador'}
+
+
+def _normalize_id_list(values) -> List[str]:
+    if not isinstance(values, list):
+        return []
+
+    seen = set()
+    normalized: List[str] = []
+    for value in values:
+        item = str(value or '').strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
+
+
+def _empty_evaluator_scope() -> Dict:
+    return {
+        'category': '',
+        'municipio_ids': [],
+        'school_ids': [],
+        'student_ids': [],
+    }
+
+
+def _normalize_evaluator_scope(scope: Optional[Dict]) -> Dict:
+    raw = scope if isinstance(scope, dict) else {}
+    category = str(raw.get('category') or '').strip().lower()
+    if category not in {'', 'secretaria', 'coordenacao', 'professor'}:
+        category = ''
+
+    return {
+        'category': category,
+        'municipio_ids': _normalize_id_list(raw.get('municipio_ids')),
+        'school_ids': _normalize_id_list(raw.get('school_ids')),
+        'student_ids': _normalize_id_list(raw.get('student_ids')),
+    }
+
+
+def _evaluator_scope_for_user(user: Optional[Dict] = None) -> Dict:
+    u = user or _current_user()
+    role = (u.get('role') or '').strip().lower()
+    if role not in AVALIADOR_ROLES:
+        return _empty_evaluator_scope()
+    return _normalize_evaluator_scope(u.get('evaluator_scope'))
+
+
+def _evaluator_scope_valid_for_create(scope: Dict) -> Tuple[bool, str]:
+    category = scope.get('category') or ''
+    if category == 'secretaria' and not scope.get('municipio_ids'):
+        return False, 'Avaliador secretaria exige ao menos um município'
+    if category == 'coordenacao' and not scope.get('school_ids'):
+        return False, 'Avaliador coordenação exige ao menos uma escola'
+    if category == 'professor' and not scope.get('student_ids'):
+        return False, 'Avaliador professor exige ao menos um aluno'
+    return True, ''
+
+
+def _evaluator_can_access_school(school: Optional[Dict], user: Optional[Dict] = None) -> bool:
+    if not school:
+        return False
+
+    scope = _evaluator_scope_for_user(user)
+    school_id = (school.get('id') or '').strip()
+    school_municipio_id = _school_municipio_id(school)
+
+    if school_id and school_id in set(scope.get('school_ids') or []):
+        return True
+    if school_municipio_id and school_municipio_id in set(scope.get('municipio_ids') or []):
+        return True
+    return False
+
+
+def _evaluator_can_access_student(student: Optional[Dict], user: Optional[Dict] = None) -> bool:
+    if not student:
+        return False
+
+    scope = _evaluator_scope_for_user(user)
+    student_id = (student.get('id') or '').strip()
+    if student_id and student_id in set(scope.get('student_ids') or []):
+        return True
+
+    school_id = (student.get('school_id') or '').strip()
+    school = _get_school_record(school_id) if school_id else None
+    return _evaluator_can_access_school(school, user)
 
 
 def _current_user() -> Dict:
@@ -1136,6 +1232,9 @@ def _school_visible_to_user(school: Dict, user: Optional[Dict] = None) -> bool:
 
     if role in VIEWER_ROLES:
         return _viewer_has_scope_to_school(u, school)
+
+    if role in AVALIADOR_ROLES:
+        return _evaluator_can_access_school(school, u)
 
     return False
 
@@ -1228,6 +1327,9 @@ def _student_visible_to_user(student: Dict, user: Optional[Dict] = None) -> bool
     if role in VIEWER_ROLES:
         return _school_visible_to_user(school, u) if school else False
 
+    if role in AVALIADOR_ROLES:
+        return _evaluator_can_access_student(student, u)
+
     return False
 
 
@@ -1287,6 +1389,9 @@ def _teacher_visible_to_user(teacher: Dict, user: Optional[Dict] = None) -> bool
     if role in VIEWER_ROLES:
         return _school_visible_to_user(school, u) if school else False
 
+    if role in AVALIADOR_ROLES:
+        return _evaluator_can_access_school(school, u) if school else False
+
     return False
 
 
@@ -1295,23 +1400,23 @@ def _scope_forbidden(message: str = 'Acesso negado para este escopo'):
 
 
 def _can_manage_pre_registration(role: str) -> bool:
-    return role in ADMIN_ROLES or role in SECRETARIA_ROLES
+    return role in ADMIN_ROLES or role in SECRETARIA_ROLES or role in AVALIADOR_ROLES
 
 
 def _can_edit_school_registration(role: str) -> bool:
-    return role in ADMIN_ROLES or role in SECRETARIA_ROLES or role in SCHOOL_STAFF_ROLES
+    return role in ADMIN_ROLES or role in SECRETARIA_ROLES or role in SCHOOL_STAFF_ROLES or role in AVALIADOR_ROLES
 
 
 def _can_submit_school_registration_form(role: str) -> bool:
-    return role in ADMIN_ROLES or role in SCHOOL_STAFF_ROLES
+    return role in ADMIN_ROLES or role in SCHOOL_STAFF_ROLES or role in AVALIADOR_ROLES
 
 
 def _can_manage_student_teacher_links(role: str) -> bool:
-    return role in ADMIN_ROLES or role in SCHOOL_STAFF_ROLES
+    return role in ADMIN_ROLES or role in SCHOOL_STAFF_ROLES or role in AVALIADOR_ROLES
 
 
 def _can_edit_learning_records(role: str) -> bool:
-    return role in ADMIN_ROLES or role in PROFESSOR_ROLES
+    return role in ADMIN_ROLES or role in PROFESSOR_ROLES or role in AVALIADOR_ROLES
 
 
 def _filter_schools_by_scope(schools: List[Dict], user: Optional[Dict] = None) -> List[Dict]:
@@ -1557,6 +1662,20 @@ def _can_access_chat_session(session_data: Dict, user: Dict) -> bool:
             return viewer_municipio_id == (session_data.get('municipio_id') or '').strip()
         return False
 
+    if role in AVALIADOR_ROLES:
+        scope = _evaluator_scope_for_user(user)
+        session_student_id = (session_data.get('student_id') or '').strip()
+        session_school_id = (session_data.get('school_id') or '').strip()
+        session_municipio_id = (session_data.get('municipio_id') or '').strip()
+
+        if session_student_id and session_student_id in set(scope.get('student_ids') or []):
+            return True
+        if session_school_id and session_school_id in set(scope.get('school_ids') or []):
+            return True
+        if session_municipio_id and session_municipio_id in set(scope.get('municipio_ids') or []):
+            return True
+        return False
+
     return False
 
 
@@ -1566,6 +1685,10 @@ def _filter_chat_sessions_by_scope(sessions: List[Dict], user: Dict) -> List[Dic
 
 def _is_admin_only_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in ADMIN_ONLY_PREFIXES)
+
+
+def _is_evaluator_blocked_path(path: str) -> bool:
+    return any(path.startswith(prefix) for prefix in AVALIADOR_BLOCKED_PREFIXES)
 
 
 def _should_audit_request(path: str, method: str) -> bool:
@@ -1611,6 +1734,9 @@ def require_authentication():
     g.current_user = _sanitize_current_user(user)
 
     if _is_admin_only_path(request.path) and g.current_user['role'] != 'admin':
+        return jsonify({'error': 'Acesso negado para este perfil'}), 403
+
+    if g.current_user['role'] in AVALIADOR_ROLES and _is_evaluator_blocked_path(request.path):
         return jsonify({'error': 'Acesso negado para este perfil'}), 403
 
     if request.method in MUTATING_METHODS and g.current_user['role'] == 'viewer':
@@ -2060,6 +2186,7 @@ def create_user():
     municipio_id = (data.get('municipio_id') or '').strip()
     school_id = (data.get('school_id') or '').strip()
     teacher_id = (data.get('teacher_id') or '').strip()
+    evaluator_scope = _normalize_evaluator_scope(data.get('evaluator_scope'))
 
     if role not in VALID_ROLES:
         return jsonify({'error': 'Perfil inválido'}), 400
@@ -2083,6 +2210,24 @@ def create_user():
         if municipio_id and school_municipio_id and municipio_id != school_municipio_id:
             return jsonify({'error': 'A escola selecionada não pertence ao município informado'}), 400
 
+    if role == 'avaliador':
+        scope_ok, scope_error = _evaluator_scope_valid_for_create(evaluator_scope)
+        if not scope_ok:
+            return jsonify({'error': scope_error}), 400
+
+        for municipio_item in evaluator_scope.get('municipio_ids') or []:
+            normalized_municipio = _normalize_municipio_id(municipio_item)
+            if not _get_municipality_record(normalized_municipio):
+                return jsonify({'error': f'Município inválido no escopo do avaliador: {municipio_item}'}), 400
+
+        for school_item in evaluator_scope.get('school_ids') or []:
+            if not _get_school_record(school_item):
+                return jsonify({'error': f'Escola inválida no escopo do avaliador: {school_item}'}), 400
+
+        for student_item in evaluator_scope.get('student_ids') or []:
+            if not _get_student_record(student_item):
+                return jsonify({'error': f'Aluno inválido no escopo do avaliador: {student_item}'}), 400
+
     try:
         user = _auth_storage.create_user(
             username=username,
@@ -2092,6 +2237,7 @@ def create_user():
             municipio_id=municipio_id,
             school_id=school_id,
             teacher_id=teacher_id,
+            evaluator_scope=evaluator_scope,
         )
         return jsonify({'message': 'Usuário criado com sucesso', 'user': user}), 201
     except ValueError as err:
@@ -2112,6 +2258,38 @@ def update_user_role(user_id):
         if not user:
             return jsonify({'error': 'Usuário não encontrado'}), 404
         return jsonify({'message': 'Perfil atualizado com sucesso', 'user': user})
+    except ValueError as err:
+        return jsonify({'error': str(err)}), 400
+
+
+@app.route('/api/auth/users/<user_id>/avaliador-scope', methods=['PUT'])
+def update_evaluator_scope(user_id):
+    """Atualiza escopo de um usuário avaliador (admin)."""
+    data = request.json or {}
+    evaluator_scope = _normalize_evaluator_scope(data.get('evaluator_scope'))
+
+    scope_ok, scope_error = _evaluator_scope_valid_for_create(evaluator_scope)
+    if not scope_ok:
+        return jsonify({'error': scope_error}), 400
+
+    for municipio_item in evaluator_scope.get('municipio_ids') or []:
+        normalized_municipio = _normalize_municipio_id(municipio_item)
+        if not _get_municipality_record(normalized_municipio):
+            return jsonify({'error': f'Município inválido no escopo do avaliador: {municipio_item}'}), 400
+
+    for school_item in evaluator_scope.get('school_ids') or []:
+        if not _get_school_record(school_item):
+            return jsonify({'error': f'Escola inválida no escopo do avaliador: {school_item}'}), 400
+
+    for student_item in evaluator_scope.get('student_ids') or []:
+        if not _get_student_record(student_item):
+            return jsonify({'error': f'Aluno inválido no escopo do avaliador: {student_item}'}), 400
+
+    try:
+        user = _auth_storage.update_evaluator_scope(user_id=user_id, evaluator_scope=evaluator_scope)
+        if not user:
+            return jsonify({'error': 'Usuário não encontrado'}), 404
+        return jsonify({'message': 'Escopo do avaliador atualizado com sucesso', 'user': user})
     except ValueError as err:
         return jsonify({'error': str(err)}), 400
 
@@ -3235,7 +3413,7 @@ def create_pdi():
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
     
-    required_fields = ['student_id', 'student_name', 'birth_date', 'guardians', 'diagnosis', 'class', 'teachers', 'trimesters']
+    required_fields = ['student_id', 'student_name', 'birth_date', 'guardians', 'trimesters']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
@@ -3243,9 +3421,6 @@ def create_pdi():
     # Validar que há pelo menos 1 guardian e 1 teacher
     if not data['guardians'] or len(data['guardians']) == 0:
         return jsonify({"error": "Pelo menos uma filiação é obrigatória"}), 400
-    
-    if not data['teachers'] or len(data['teachers']) == 0:
-        return jsonify({"error": "Pelo menos um docente é obrigatório"}), 400
     
     try:
         _sync_legacy_pdi_links()
@@ -3291,9 +3466,9 @@ def create_pdi():
                 student_name=student_name,
                 birth_date=data['birth_date'],
                 guardians=data['guardians'],
-                diagnosis=data['diagnosis'],
-                class_name=data['class'],
-                teachers=data['teachers'],
+                diagnosis=data.get('diagnosis', ''),
+                class_name=data.get('class', ''),
+                teachers=data.get('teachers', []),
                 trimesters=normalized_trimesters,
                 student_id=student_id,
                 student_grade=student_grade,
@@ -3303,9 +3478,9 @@ def create_pdi():
                 student_name=student_name,
                 birth_date=data['birth_date'],
                 guardians=data['guardians'],
-                diagnosis=data['diagnosis'],
-                class_name=data['class'],
-                teachers=data['teachers'],
+                diagnosis=data.get('diagnosis', ''),
+                class_name=data.get('class', ''),
+                teachers=data.get('teachers', []),
                 trimesters=normalized_trimesters,
                 student_id=student_id,
                 student_grade=student_grade,
@@ -3315,9 +3490,9 @@ def create_pdi():
                     student_name=student_name,
                     birth_date=data['birth_date'],
                     guardians=data['guardians'],
-                    diagnosis=data['diagnosis'],
-                    class_name=data['class'],
-                    teachers=data['teachers'],
+                    diagnosis=data.get('diagnosis', ''),
+                    class_name=data.get('class', ''),
+                    teachers=data.get('teachers', []),
                     trimesters=normalized_trimesters,
                     student_id=student_id,
                     student_grade=student_grade,
@@ -3344,7 +3519,7 @@ def update_pdi(pdi_id):
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
     
-    required_fields = ['student_id', 'student_name', 'birth_date', 'guardians', 'diagnosis', 'class', 'teachers', 'trimesters']
+    required_fields = ['student_id', 'student_name', 'birth_date', 'guardians', 'trimesters']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
@@ -3352,9 +3527,6 @@ def update_pdi(pdi_id):
     # Validar que há pelo menos 1 guardian e 1 teacher
     if not data['guardians'] or len(data['guardians']) == 0:
         return jsonify({"error": "Pelo menos uma filiação é obrigatória"}), 400
-    
-    if not data['teachers'] or len(data['teachers']) == 0:
-        return jsonify({"error": "Pelo menos um docente é obrigatório"}), 400
     
     try:
         _sync_legacy_pdi_links()

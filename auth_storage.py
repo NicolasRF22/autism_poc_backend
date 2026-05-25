@@ -14,6 +14,14 @@ VALID_ROLES = {
     "coordenacao",
     "professor",
     "viewer",
+    "avaliador",
+}
+
+DEFAULT_EVALUATOR_SCOPE = {
+    "category": "",
+    "municipio_ids": [],
+    "school_ids": [],
+    "student_ids": [],
 }
 
 
@@ -66,6 +74,7 @@ class AuthStorage:
         self._save_index()
 
     def _sanitize_user(self, user: Dict) -> Dict:
+        evaluator_scope = self._normalize_evaluator_scope(user.get("evaluator_scope"))
         return {
             "id": user["id"],
             "username": user["username"],
@@ -74,9 +83,38 @@ class AuthStorage:
             "municipio_id": user.get("municipio_id") or "",
             "school_id": user.get("school_id") or "",
             "teacher_id": user.get("teacher_id") or "",
+            "evaluator_scope": evaluator_scope,
             "is_active": user.get("is_active", True),
             "created_at": user.get("created_at"),
             "updated_at": user.get("updated_at"),
+        }
+
+    @staticmethod
+    def _normalize_str_list(value) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        normalized: List[str] = []
+        seen = set()
+        for item in value:
+            item_str = str(item or "").strip()
+            if not item_str or item_str in seen:
+                continue
+            seen.add(item_str)
+            normalized.append(item_str)
+        return normalized
+
+    @classmethod
+    def _normalize_evaluator_scope(cls, evaluator_scope: Optional[Dict]) -> Dict:
+        scope = evaluator_scope if isinstance(evaluator_scope, dict) else {}
+        category = str(scope.get("category") or "").strip().lower()
+        if category not in {"", "secretaria", "coordenacao", "professor"}:
+            category = ""
+
+        return {
+            "category": category,
+            "municipio_ids": cls._normalize_str_list(scope.get("municipio_ids")),
+            "school_ids": cls._normalize_str_list(scope.get("school_ids")),
+            "student_ids": cls._normalize_str_list(scope.get("student_ids")),
         }
 
     def list_users(self) -> List[Dict]:
@@ -113,6 +151,7 @@ class AuthStorage:
         municipio_id: str = "",
         school_id: str = "",
         teacher_id: str = "",
+        evaluator_scope: Optional[Dict] = None,
     ) -> Dict:
         username = (username or "").strip()
         role = (role or "").strip().lower()
@@ -139,6 +178,16 @@ class AuthStorage:
         if role == "viewer" and not (municipio_id or school_id):
             raise ValueError("Usuário viewer exige municipio_id ou school_id")
 
+        normalized_evaluator_scope = self._normalize_evaluator_scope(evaluator_scope)
+        if role == "avaliador":
+            category = normalized_evaluator_scope.get("category") or ""
+            if category == "secretaria" and not normalized_evaluator_scope.get("municipio_ids"):
+                raise ValueError("Avaliador secretaria exige ao menos um município")
+            if category == "coordenacao" and not normalized_evaluator_scope.get("school_ids"):
+                raise ValueError("Avaliador coordenação exige ao menos uma escola")
+            if category == "professor" and not normalized_evaluator_scope.get("student_ids"):
+                raise ValueError("Avaliador professor exige ao menos um aluno")
+
         now = now_brasilia_iso()
         user = {
             "id": str(uuid.uuid4()),
@@ -149,6 +198,7 @@ class AuthStorage:
             "municipio_id": municipio_id,
             "school_id": school_id,
             "teacher_id": teacher_id,
+            "evaluator_scope": normalized_evaluator_scope,
             "is_active": True,
             "created_at": now,
             "updated_at": now,
@@ -167,6 +217,32 @@ class AuthStorage:
             return None
 
         user["role"] = role
+        if role != "avaliador":
+            user["evaluator_scope"] = self._normalize_evaluator_scope(None)
+        elif not isinstance(user.get("evaluator_scope"), dict):
+            user["evaluator_scope"] = self._normalize_evaluator_scope(None)
+        user["updated_at"] = now_brasilia_iso()
+        self._save_index()
+        return self._sanitize_user(user)
+
+    def update_evaluator_scope(self, user_id: str, evaluator_scope: Dict) -> Optional[Dict]:
+        user = self._get_raw_user_by_id(user_id)
+        if not user:
+            return None
+
+        if (user.get("role") or "").strip().lower() != "avaliador":
+            raise ValueError("Escopo só pode ser atualizado para usuários avaliador")
+
+        normalized_scope = self._normalize_evaluator_scope(evaluator_scope)
+        category = normalized_scope.get("category") or ""
+        if category == "secretaria" and not normalized_scope.get("municipio_ids"):
+            raise ValueError("Avaliador secretaria exige ao menos um município")
+        if category == "coordenacao" and not normalized_scope.get("school_ids"):
+            raise ValueError("Avaliador coordenação exige ao menos uma escola")
+        if category == "professor" and not normalized_scope.get("student_ids"):
+            raise ValueError("Avaliador professor exige ao menos um aluno")
+
+        user["evaluator_scope"] = normalized_scope
         user["updated_at"] = now_brasilia_iso()
         self._save_index()
         return self._sanitize_user(user)

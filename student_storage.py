@@ -72,6 +72,7 @@ class StudentStorage:
             summaries.append({
                 "id": student["id"],
                 "name": self._student_name(student),
+                "birth_date": student.get("birth_date", student.get("birthDate", student.get("date_of_birth", ""))),
                 "age": student.get("age", student.get("studentAge", "")),
                 "school_id": student.get("school_id", ""),
                 "school_name": student.get("school_name", student.get("schoolName", "")),
