@@ -1136,13 +1136,9 @@ def _evaluator_scope_for_user(user: Optional[Dict] = None) -> Dict:
 
 
 def _evaluator_scope_valid_for_create(scope: Dict) -> Tuple[bool, str]:
-    category = scope.get('category') or ''
-    if category == 'secretaria' and not scope.get('municipio_ids'):
-        return False, 'Avaliador secretaria exige ao menos um município'
-    if category == 'coordenacao' and not scope.get('school_ids'):
-        return False, 'Avaliador coordenação exige ao menos uma escola'
-    if category == 'professor' and not scope.get('student_ids'):
-        return False, 'Avaliador professor exige ao menos um aluno'
+    # Simplified evaluator scope: require at least one municipio
+    if not scope.get('municipio_ids'):
+        return False, 'Avaliador exige ao menos um município'
     return True, ''
 
 

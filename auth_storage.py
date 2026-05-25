@@ -180,13 +180,9 @@ class AuthStorage:
 
         normalized_evaluator_scope = self._normalize_evaluator_scope(evaluator_scope)
         if role == "avaliador":
-            category = normalized_evaluator_scope.get("category") or ""
-            if category == "secretaria" and not normalized_evaluator_scope.get("municipio_ids"):
-                raise ValueError("Avaliador secretaria exige ao menos um município")
-            if category == "coordenacao" and not normalized_evaluator_scope.get("school_ids"):
-                raise ValueError("Avaliador coordenação exige ao menos uma escola")
-            if category == "professor" and not normalized_evaluator_scope.get("student_ids"):
-                raise ValueError("Avaliador professor exige ao menos um aluno")
+            # Simplified evaluator scope: require at least one municipio
+            if not normalized_evaluator_scope.get("municipio_ids"):
+                raise ValueError("Avaliador exige ao menos um município no escopo")
 
         now = now_brasilia_iso()
         user = {
@@ -234,13 +230,9 @@ class AuthStorage:
             raise ValueError("Escopo só pode ser atualizado para usuários avaliador")
 
         normalized_scope = self._normalize_evaluator_scope(evaluator_scope)
-        category = normalized_scope.get("category") or ""
-        if category == "secretaria" and not normalized_scope.get("municipio_ids"):
-            raise ValueError("Avaliador secretaria exige ao menos um município")
-        if category == "coordenacao" and not normalized_scope.get("school_ids"):
-            raise ValueError("Avaliador coordenação exige ao menos uma escola")
-        if category == "professor" and not normalized_scope.get("student_ids"):
-            raise ValueError("Avaliador professor exige ao menos um aluno")
+        # Require at least one municipio for evaluator scope
+        if not normalized_scope.get("municipio_ids"):
+            raise ValueError("Avaliador exige ao menos um município no escopo")
 
         user["evaluator_scope"] = normalized_scope
         user["updated_at"] = now_brasilia_iso()
