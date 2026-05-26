@@ -934,7 +934,7 @@ class StudentPostgresRepository(_BaseRepository):
                         .join(TeacherStudentLinkRecord,
                               StudentRecord.id == TeacherStudentLinkRecord.student_id)
                         .where(TeacherStudentLinkRecord.teacher_id.in_(teacher_ids))
-                        .distinct())
+                        .distinct(StudentRecord.id))
             else:
                 return []
 
@@ -1481,7 +1481,7 @@ class DiaryPostgresRepository(_BaseRepository):
                         .join(TeacherStudentLinkRecord,
                               DiaryEntryRecord.student_id == TeacherStudentLinkRecord.student_id)
                         .where(TeacherStudentLinkRecord.teacher_id.in_(teacher_ids))
-                        .distinct())
+                        .distinct(DiaryEntryRecord.id))
             else:
                 return []
 
@@ -1755,7 +1755,7 @@ class PDIPostgresRepository(_BaseRepository):
                         .join(TeacherStudentLinkRecord,
                               PDIRecord.student_id == TeacherStudentLinkRecord.student_id)
                         .where(TeacherStudentLinkRecord.teacher_id.in_(teacher_ids))
-                        .distinct())
+                        .distinct(PDIRecord.id))
             else:
                 return []
 
