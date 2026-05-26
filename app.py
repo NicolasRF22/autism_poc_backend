@@ -216,7 +216,6 @@ _diary_storage = DiaryStorage(storage_dir=DIARIES_FOLDER)
 _pdi_storage = PDIStorage(storage_dir=PDIS_FOLDER)
 PROMPTS_FOLDER = os.path.join(os.path.dirname(__file__), 'prompts')
 os.makedirs(PROMPTS_FOLDER, exist_ok=True)
-_prompt_storage = PromptStorage(storage_dir=PROMPTS_FOLDER)
 
 SCHOOLS_FOLDER = os.path.join(os.path.dirname(__file__), 'schools')
 MUNICIPALITIES_FOLDER = os.path.join(os.path.dirname(__file__), 'municipalities')
@@ -244,6 +243,8 @@ SUPABASE_SERVICE_ROLE_KEY = (os.getenv('SUPABASE_SERVICE_ROLE_KEY') or '').strip
 RAG_STORAGE_BUCKET = (os.getenv('SUPABASE_STORAGE_BUCKET_RAG', 'rag-documents') or 'rag-documents').strip()
 PEI_STORAGE_BUCKET = (os.getenv('SUPABASE_STORAGE_BUCKET_PEI', 'pei-documents') or 'pei-documents').strip()
 DIARY_IMAGES_BUCKET = (os.getenv('SUPABASE_STORAGE_BUCKET_DIARY_IMAGES', 'diary-images') or 'diary-images').strip()
+
+_prompt_storage = PromptStorage(storage_dir=PROMPTS_FOLDER, database_url=DATABASE_URL)
 # Lista canônica de anos/series esperada pelo sistema
 ALLOWED_GRADES = [
     '1° Ano do Infantil',
@@ -482,6 +483,9 @@ ADMIN_ONLY_PREFIXES = (
     '/api/auth/users',
     '/api/audit',
     '/api/admin',
+    '/api/rag/pei-prompt',
+    '/api/rag/chat-prompt',
+    '/api/rag/prompts',
 )
 
 AVALIADOR_BLOCKED_PREFIXES = (
@@ -4958,6 +4962,94 @@ def reset_chat_prompt():
         return jsonify(restored)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/prompts', methods=['GET'])
+def list_prompts():
+    """Lista prompts salvos por escopo."""
+    scope = (request.args.get('scope') or '').strip().lower()
+    if scope not in {'chat', 'pei'}:
+        return jsonify({'error': 'Escopo inválido'}), 400
+    try:
+        return jsonify(_prompt_storage.get_prompt_bundle(scope))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/rag/prompts', methods=['POST'])
+def create_prompt():
+    """Cria um novo prompt persistido."""
+    data = request.json or {}
+    scope = (data.get('scope') or '').strip().lower()
+    name = (data.get('name') or '').strip()
+    description = (data.get('description') or '').strip()
+    content = (data.get('content') or data.get('prompt') or '').strip()
+    if scope not in {'chat', 'pei'}:
+        return jsonify({'error': 'Escopo inválido'}), 400
+    if not name:
+        return jsonify({'error': 'Nome é obrigatório'}), 400
+    if not content:
+        return jsonify({'error': 'Prompt é obrigatório'}), 400
+
+    try:
+        created = _prompt_storage.create_prompt(
+            scope=scope,
+            name=name,
+            description=description,
+            content=content,
+            activate=bool(data.get('activate')),
+        )
+        return jsonify(created)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/rag/prompts/<prompt_id>', methods=['PUT'])
+def update_prompt(prompt_id):
+    """Atualiza um prompt salvo."""
+    data = request.json or {}
+    scope = (data.get('scope') or '').strip().lower() or None
+    name = data.get('name')
+    description = data.get('description')
+    content = data.get('content') or data.get('prompt')
+    activate = data.get('activate')
+    try:
+        updated = _prompt_storage.update_prompt(
+            prompt_id,
+            scope=scope,
+            name=name,
+            description=description,
+            content=content,
+            activate=activate if isinstance(activate, bool) else None,
+        )
+        if activate is True:
+            _prompt_storage.activate_prompt(prompt_id)
+        return jsonify(updated)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/rag/prompts/<prompt_id>', methods=['DELETE'])
+def delete_prompt(prompt_id):
+    """Remove um prompt salvo."""
+    try:
+        deleted = _prompt_storage.delete_prompt(prompt_id)
+        return jsonify(deleted)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/rag/prompts/<prompt_id>/activate', methods=['POST'])
+def activate_prompt(prompt_id):
+    """Define um prompt como ativo para o seu escopo."""
+    try:
+        _prompt_storage.activate_prompt(prompt_id)
+        prompt = _prompt_storage.get_prompt(prompt_id)
+        if not prompt:
+            return jsonify({'error': 'Prompt não encontrado'}), 404
+        return jsonify(_prompt_storage.get_prompt_bundle(prompt['scope']))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/rag/peis', methods=['GET'])
