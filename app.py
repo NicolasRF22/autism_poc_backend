@@ -4612,7 +4612,7 @@ def rag_chat():
                 session_id=session_id,
                 role='assistant',
                 content=(result.get('response') or '').strip(),
-                user_id='assistant',
+                user_id=(current_user.get('id') or '').strip(),
                 username='assistant',
                 sources={'documents': result.get('sources') or []},
                 extra={
