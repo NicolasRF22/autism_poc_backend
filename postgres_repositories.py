@@ -163,6 +163,7 @@ class UserProfileRecord(Base):
         ForeignKey('teachers.id', ondelete='SET NULL', name='fk_user_profiles_teacher'),
         nullable=True,
     )
+    evaluator_scope: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -347,6 +348,7 @@ class PostgresAuthRepository:
         'coordenacao',
         'professor',
         'viewer',
+        'avaliador',
     }
 
     def __init__(self, session_factory, default_admin_username: str = 'admin', default_admin_password: str = ''):
@@ -377,6 +379,7 @@ class PostgresAuthRepository:
             'municipio_id': user.municipio_id or '',
             'school_id': user.school_id or '',
             'teacher_id': user.teacher_id or '',
+            'evaluator_scope': user.evaluator_scope or {},
             'is_active': bool(user.is_active),
             'created_at': user.created_at,
             'updated_at': user.updated_at,
@@ -456,6 +459,7 @@ class PostgresAuthRepository:
         municipio_id: str = '',
         school_id: str = '',
         teacher_id: str = '',
+        evaluator_scope: Optional[dict] = None,
     ) -> Dict:
         from werkzeug.security import generate_password_hash
 
@@ -485,6 +489,7 @@ class PostgresAuthRepository:
                 municipio_id=municipio_id or None,
                 school_id=school_id or None,
                 teacher_id=teacher_id or None,
+                evaluator_scope=evaluator_scope or None,
                 is_active=True,
                 created_at=now,
                 updated_at=now,
@@ -503,6 +508,7 @@ class PostgresAuthRepository:
         municipio_id: str = '',
         school_id: str = '',
         teacher_id: str = '',
+        evaluator_scope: Optional[dict] = None,
         is_active: bool = True,
         created_at: Optional[str] = None,
         updated_at: Optional[str] = None,
@@ -532,6 +538,7 @@ class PostgresAuthRepository:
                     municipio_id=municipio_id or None,
                     school_id=school_id or None,
                     teacher_id=teacher_id or None,
+                    evaluator_scope=evaluator_scope or None,
                     is_active=bool(is_active),
                     created_at=created_at or now,
                     updated_at=updated_at or now,
@@ -548,6 +555,7 @@ class PostgresAuthRepository:
             record.municipio_id = municipio_id or None
             record.school_id = school_id or None
             record.teacher_id = teacher_id or None
+            record.evaluator_scope = evaluator_scope or None
             record.is_active = bool(is_active)
             if created_at:
                 record.created_at = created_at
