@@ -171,13 +171,7 @@ def _build_source_evidence_block(
 
 app = Flask(__name__)
 DEBUG_MODE = _to_bool(os.getenv('DEBUG', 'False'), default=False)
-CORS(app, resources={r'/api/*': {
-    'origins': _parse_cors_origins(),
-    'max_age': 600,                          # browser cacheia o preflight por 10 min
-    'supports_credentials': False,           # sem cookies — só Authorization header
-    'allow_headers': ['Authorization', 'Content-Type', 'Accept'],
-    'methods': ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-}})
+CORS(app, resources={r'/api/*': {'origins': _parse_cors_origins()}})
 
 # ------------------------------------------------------------------
 # RAG Engine (inicializado sob demanda para evitar falha sem API key)
@@ -483,9 +477,6 @@ ADMIN_ONLY_PREFIXES = (
     '/api/auth/users',
     '/api/audit',
     '/api/admin',
-    '/api/rag/pei-prompt',
-    '/api/rag/chat-prompt',
-    '/api/rag/prompts',
 )
 
 AVALIADOR_BLOCKED_PREFIXES = (
@@ -1017,12 +1008,10 @@ def _sync_legacy_diary_links_for_repo(repo, students: List[Dict]) -> int:
 
 
 def _sync_legacy_diary_links() -> int:
-    # Em modo postgres os vínculos são mantidos pela coluna FK student_id,
-    # populada na migração e em cada create/update. Sync por nome é desnecessário.
-    if _is_postgres_mode():
-        return 0
-
     students = _list_student_summaries()
+    if _is_postgres_mode():
+        return _sync_legacy_diary_links_for_repo(_postgres_repositories['diary'], students)
+
     linked = _sync_legacy_diary_links_for_repo(_diary_storage, students)
     if _is_dual_mode():
         linked += _sync_legacy_diary_links_for_repo(_postgres_repositories['diary'], students)
@@ -1030,10 +1019,6 @@ def _sync_legacy_diary_links() -> int:
 
 
 def _sync_legacy_pdi_links() -> int:
-    # Mesmo motivo: em modo postgres a coluna FK student_id já está populada.
-    if _is_postgres_mode():
-        return 0
-
     students = _list_student_summaries()
 
     def _sync_repo(repo):
@@ -1123,9 +1108,18 @@ def _normalize_evaluator_scope(scope: Optional[Dict]) -> Dict:
     if category not in {'', 'secretaria', 'coordenacao', 'professor'}:
         category = ''
 
+    normalized_municipio_ids = []
+    seen_municipio_ids = set()
+    for municipio_id in _normalize_id_list(raw.get('municipio_ids')):
+        normalized_id = _normalize_municipio_id(municipio_id)
+        if not normalized_id or normalized_id in seen_municipio_ids:
+            continue
+        seen_municipio_ids.add(normalized_id)
+        normalized_municipio_ids.append(normalized_id)
+
     return {
         'category': category,
-        'municipio_ids': _normalize_id_list(raw.get('municipio_ids')),
+        'municipio_ids': normalized_municipio_ids,
         'school_ids': _normalize_id_list(raw.get('school_ids')),
         'student_ids': _normalize_id_list(raw.get('student_ids')),
     }
@@ -1136,7 +1130,15 @@ def _evaluator_scope_for_user(user: Optional[Dict] = None) -> Dict:
     role = (u.get('role') or '').strip().lower()
     if role not in AVALIADOR_ROLES:
         return _empty_evaluator_scope()
-    return _normalize_evaluator_scope(u.get('evaluator_scope'))
+
+    scope = _normalize_evaluator_scope(u.get('evaluator_scope'))
+
+    # Backward compatibility: some evaluator users were linked only with municipio_id.
+    fallback_municipio_id = _normalize_municipio_id((u.get('municipio_id') or '').strip())
+    if fallback_municipio_id and fallback_municipio_id not in set(scope.get('municipio_ids') or []):
+        scope['municipio_ids'] = [*scope.get('municipio_ids', []), fallback_municipio_id]
+
+    return scope
 
 
 def _evaluator_scope_valid_for_create(scope: Dict) -> Tuple[bool, str]:
@@ -1152,7 +1154,7 @@ def _evaluator_can_access_school(school: Optional[Dict], user: Optional[Dict] = 
 
     scope = _evaluator_scope_for_user(user)
     school_id = (school.get('id') or '').strip()
-    school_municipio_id = _school_municipio_id(school)
+    school_municipio_id = _normalize_municipio_id(_school_municipio_id(school))
 
     if school_id and school_id in set(scope.get('school_ids') or []):
         return True
@@ -1269,29 +1271,6 @@ def _get_professor_teacher_ids(user: Optional[Dict] = None) -> Set[str]:
     return ids
 
 
-def _build_scope_filter() -> Dict:
-    """
-    Monta o filtro de escopo para o usuário logado.
-    Para role professor faz no máximo 1 query (list_all_teachers) para resolver teacher_ids.
-    O resultado é passado diretamente para os métodos *_by_scope dos repositórios.
-    """
-    user = _current_user()
-    role = (user.get('role') or '').strip().lower()
-    school_id = (user.get('school_id') or '').strip()
-    municipio_id = (user.get('municipio_id') or '').strip()
-
-    teacher_ids: List[str] = []
-    if role in PROFESSOR_ROLES:
-        teacher_ids = list(_get_professor_teacher_ids(user))
-
-    return {
-        'role': role,
-        'school_id': school_id,
-        'municipio_id': municipio_id,
-        'teacher_ids': teacher_ids,
-    }
-
-
 def _student_visible_to_user(student: Dict, user: Optional[Dict] = None) -> bool:
     if not student:
         return False
@@ -1331,6 +1310,35 @@ def _student_visible_to_user(student: Dict, user: Optional[Dict] = None) -> bool
         return _evaluator_can_access_student(student, u)
 
     return False
+
+
+def _pei_visible_to_user(pei_entry: Dict, user: Optional[Dict] = None) -> bool:
+    if not pei_entry:
+        return False
+
+    u = user or _current_user()
+    if _is_global_user(u):
+        return True
+
+    student_id = (pei_entry.get('student_id') or '').strip()
+    if student_id:
+        student = _get_student_record(student_id)
+        return bool(student and _student_visible_to_user(student, u))
+
+    student_name = (pei_entry.get('student_name') or pei_entry.get('studentName') or '').strip()
+    if not student_name:
+        return False
+
+    school = (pei_entry.get('school') or pei_entry.get('school_name') or '').strip()
+    if school:
+        for student in _find_students_by_name(student_name):
+            if not _student_visible_to_user(student, u):
+                continue
+            if _student_school_from_record(student) == school:
+                return True
+        return False
+
+    return _student_name_visible_to_user(student_name, u)
 
 
 def _entry_visible_to_user(entry: Dict, user: Optional[Dict] = None) -> bool:
@@ -1666,7 +1674,7 @@ def _can_access_chat_session(session_data: Dict, user: Dict) -> bool:
         scope = _evaluator_scope_for_user(user)
         session_student_id = (session_data.get('student_id') or '').strip()
         session_school_id = (session_data.get('school_id') or '').strip()
-        session_municipio_id = (session_data.get('municipio_id') or '').strip()
+        session_municipio_id = _normalize_municipio_id((session_data.get('municipio_id') or '').strip())
 
         if session_student_id and session_student_id in set(scope.get('student_ids') or []):
             return True
@@ -1691,6 +1699,37 @@ def _is_evaluator_blocked_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in AVALIADOR_BLOCKED_PREFIXES)
 
 
+def _is_evaluator_blocked_request(path: str, method: str) -> bool:
+    if not path.startswith('/api/rag'):
+        return False
+
+    if path in {'/api/rag/chat', '/api/rag/chat/current-session', '/api/rag/chat/history-by-day'}:
+        return False
+
+    if path == '/api/rag/generate-pei':
+        return method != 'POST'
+
+    if path == '/api/rag/pei-sources-preview':
+        return method != 'GET'
+
+    if path == '/api/rag/peis':
+        return method != 'GET'
+
+    if path.startswith('/api/rag/peis/'):
+        return method != 'GET'
+
+    if path in {'/api/rag/pei-prompt', '/api/rag/chat-prompt'}:
+        return method != 'GET'
+
+    if path.startswith('/api/rag/documents') or path == '/api/rag/upload':
+        return True
+
+    if path.startswith('/api/rag/prompts'):
+        return True
+
+    return False
+
+
 def _should_audit_request(path: str, method: str) -> bool:
     if not path.startswith('/api'):
         return False
@@ -1699,13 +1738,6 @@ def _should_audit_request(path: str, method: str) -> bool:
     if method == 'OPTIONS':
         return False
     return True
-
-
-@app.before_request
-def handle_options_preflight():
-    """Responde preflights CORS imediatamente sem passar por auth ou DB."""
-    if request.method == 'OPTIONS':
-        return app.make_default_options_response()
 
 
 @app.before_request
@@ -1736,7 +1768,7 @@ def require_authentication():
     if _is_admin_only_path(request.path) and g.current_user['role'] != 'admin':
         return jsonify({'error': 'Acesso negado para este perfil'}), 403
 
-    if g.current_user['role'] in AVALIADOR_ROLES and _is_evaluator_blocked_path(request.path):
+    if g.current_user['role'] in AVALIADOR_ROLES and _is_evaluator_blocked_request(request.path, request.method):
         return jsonify({'error': 'Acesso negado para este perfil'}), 403
 
     if request.method in MUTATING_METHODS and g.current_user['role'] == 'viewer':
@@ -2439,11 +2471,7 @@ def get_diary_students():
     """Lista todos os alunos com diários (com resumos)"""
     try:
         _sync_legacy_diary_links()
-        if _read_from_postgres_first():
-            scope = _build_scope_filter()
-            summaries = _postgres_repositories['diary'].list_diary_summaries_by_scope(scope)
-            return jsonify(summaries)
-        summaries = _diary_storage.list_all_summaries()
+        summaries = _read_with_optional_fallback('diary', _diary_storage, 'list_all_summaries')
         filtered = []
         for summary in summaries:
             student_id = (summary.get('student_id') or '').strip()
@@ -2454,6 +2482,7 @@ def get_diary_students():
                 continue
             if _student_name_visible_to_user(summary.get('student_name') or ''):
                 filtered.append(summary)
+
         return jsonify(filtered)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2464,18 +2493,25 @@ def get_available_diary_students():
     """Lista alunos cadastrados que ainda não possuem diário."""
     try:
         _sync_legacy_diary_links()
-        if _read_from_postgres_first():
-            scope = _build_scope_filter()
-            students = _postgres_repositories['student'].list_students_by_scope(scope)
-            diary_summaries = _postgres_repositories['diary'].list_diary_summaries_by_scope(scope)
-            used_ids = {(s.get('student_id') or '').strip() for s in diary_summaries}
-            return jsonify([s for s in students if (s.get('id') or '').strip() not in used_ids])
-
         students = _list_student_summaries()
-        diary_summaries = _diary_storage.list_all_summaries()
-        used_ids = {(s.get('student_id') or '').strip() for s in diary_summaries if s.get('student_id')}
-        available = [s for s in students if (s.get('id') or '').strip() not in used_ids]
-        return jsonify(_filter_students_by_scope(available))
+        diary_summaries = _read_with_optional_fallback('diary', _diary_storage, 'list_all_summaries')
+
+        used_student_ids = {
+            (summary.get('student_id') or '').strip()
+            for summary in diary_summaries
+            if (summary.get('student_id') or '').strip()
+        }
+
+        available_students = []
+        for student in students:
+            student_id = (student.get('id') or '').strip()
+
+            if student_id and student_id in used_student_ids:
+                continue
+
+            available_students.append(student)
+
+        return jsonify(_filter_students_by_scope(available_students))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2674,7 +2710,7 @@ def get_diary_entry(entry_id):
             return jsonify({"error": "Entrada não encontrada"}), 404
 
         if not _entry_visible_to_user(entry):
-            return _scope_forbidden()
+            return _scope_forbidden('Você não tem permissão para editar esta entrada.')
 
         return jsonify(entry)
     except Exception as e:
@@ -2722,6 +2758,7 @@ def update_diary_entry(entry_id):
         if not diary_date:
             return jsonify({"error": "Data do registro é obrigatória"}), 400
 
+        attendance = (data.get('attendance') or existing_entry.get('attendance') or 'presente').strip().lower()
         answers = data.get('answers', existing_entry.get('answers', {}))
         if attendance == 'presente':
             if not isinstance(answers, dict) or not answers:
@@ -2730,7 +2767,6 @@ def update_diary_entry(entry_id):
             answers = {}
 
         open_obs = data.get('open_obs', existing_entry.get('open_obs', ''))
-        attendance = (data.get('attendance') or existing_entry.get('attendance') or 'presente').strip().lower()
         absence_explanation = data.get('absence_explanation', existing_entry.get('absence_explanation', ''))
         status = (data.get('status') or existing_entry.get('status') or 'final').strip().lower()
         source = (data.get('source') or existing_entry.get('source') or 'manual').strip().lower()
@@ -3283,12 +3319,7 @@ def get_all_pdis():
     """Lista todos os PDIs com informações resumidas"""
     try:
         _sync_legacy_pdi_links()
-        if _read_from_postgres_first():
-            scope = _build_scope_filter()
-            pdis = _postgres_repositories['pdi'].list_pdis_by_scope(scope)
-            return jsonify(pdis)
-
-        pdis = _pdi_storage.list_all_pdis()
+        pdis = _read_with_optional_fallback('pdi', _pdi_storage, 'list_all_pdis')
         filtered = []
         for pdi in pdis:
             student_id = (pdi.get('student_id') or '').strip()
@@ -3304,6 +3335,7 @@ def get_all_pdis():
                         student_grade = matches[0].get('grade') or matches[0].get('schoolYear') or ''
                 if student_grade:
                     pdi['student_grade'] = student_grade
+
             if student_id:
                 student = _get_student_record(student_id)
                 if student and _student_visible_to_user(student):
@@ -3321,13 +3353,6 @@ def get_available_pdi_students():
     """Lista alunos cadastrados que ainda não possuem PDI."""
     try:
         _sync_legacy_pdi_links()
-        if _read_from_postgres_first():
-            scope = _build_scope_filter()
-            students = _postgres_repositories['student'].list_students_by_scope(scope)
-            pdis = _postgres_repositories['pdi'].list_pdis_by_scope(scope)
-            used_ids = {(p.get('student_id') or '').strip() for p in pdis if p.get('student_id')}
-            return jsonify([s for s in students if (s.get('id') or '').strip() not in used_ids])
-
         students = _list_student_summaries()
         pdis = _read_with_optional_fallback('pdi', _pdi_storage, 'list_all_pdis')
 
@@ -3664,9 +3689,9 @@ def get_all_schools():
     """Lista todas as escolas cadastradas"""
     try:
         if _read_from_postgres_first():
-            scope = _build_scope_filter()
-            schools = _postgres_repositories['school'].list_schools_by_scope(scope)
-            return jsonify(schools)
+            schools_pg = _postgres_repositories['school'].list_all_schools()
+            if schools_pg or _is_postgres_mode():
+                return jsonify(_filter_schools_by_scope(schools_pg))
         schools = _school_storage.list_all_schools()
         return jsonify(_filter_schools_by_scope(schools))
     except Exception as e:
@@ -3845,9 +3870,9 @@ def get_all_students():
     """Lista todos os alunos cadastrados"""
     try:
         if _read_from_postgres_first():
-            scope = _build_scope_filter()
-            students = _postgres_repositories['student'].list_students_by_scope(scope)
-            return jsonify(students)
+            students_pg = _postgres_repositories['student'].list_all_students()
+            if students_pg or _is_postgres_mode():
+                return jsonify(_filter_students_by_scope(students_pg))
         students = _student_storage.list_all_students()
         return jsonify(_filter_students_by_scope(students))
     except Exception as e:
@@ -4096,9 +4121,9 @@ def get_all_teachers():
     """Lista todos os docentes cadastrados."""
     try:
         if _read_from_postgres_first():
-            scope = _build_scope_filter()
-            teachers = _postgres_repositories['teacher'].list_teachers_by_scope(scope)
-            return jsonify(teachers)
+            teachers_pg = _postgres_repositories['teacher'].list_all_teachers()
+            if teachers_pg or _is_postgres_mode():
+                return jsonify(_filter_teachers_by_scope(teachers_pg))
         teachers = _teacher_storage.list_all_teachers()
         return jsonify(_filter_teachers_by_scope(teachers))
     except Exception as e:
@@ -4964,94 +4989,6 @@ def reset_chat_prompt():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/rag/prompts', methods=['GET'])
-def list_prompts():
-    """Lista prompts salvos por escopo."""
-    scope = (request.args.get('scope') or '').strip().lower()
-    if scope not in {'chat', 'pei'}:
-        return jsonify({'error': 'Escopo inválido'}), 400
-    try:
-        return jsonify(_prompt_storage.get_prompt_bundle(scope))
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rag/prompts', methods=['POST'])
-def create_prompt():
-    """Cria um novo prompt persistido."""
-    data = request.json or {}
-    scope = (data.get('scope') or '').strip().lower()
-    name = (data.get('name') or '').strip()
-    description = (data.get('description') or '').strip()
-    content = (data.get('content') or data.get('prompt') or '').strip()
-    if scope not in {'chat', 'pei'}:
-        return jsonify({'error': 'Escopo inválido'}), 400
-    if not name:
-        return jsonify({'error': 'Nome é obrigatório'}), 400
-    if not content:
-        return jsonify({'error': 'Prompt é obrigatório'}), 400
-
-    try:
-        created = _prompt_storage.create_prompt(
-            scope=scope,
-            name=name,
-            description=description,
-            content=content,
-            activate=bool(data.get('activate')),
-        )
-        return jsonify(created)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rag/prompts/<prompt_id>', methods=['PUT'])
-def update_prompt(prompt_id):
-    """Atualiza um prompt salvo."""
-    data = request.json or {}
-    scope = (data.get('scope') or '').strip().lower() or None
-    name = data.get('name')
-    description = data.get('description')
-    content = data.get('content') or data.get('prompt')
-    activate = data.get('activate')
-    try:
-        updated = _prompt_storage.update_prompt(
-            prompt_id,
-            scope=scope,
-            name=name,
-            description=description,
-            content=content,
-            activate=activate if isinstance(activate, bool) else None,
-        )
-        if activate is True:
-            _prompt_storage.activate_prompt(prompt_id)
-        return jsonify(updated)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rag/prompts/<prompt_id>', methods=['DELETE'])
-def delete_prompt(prompt_id):
-    """Remove um prompt salvo."""
-    try:
-        deleted = _prompt_storage.delete_prompt(prompt_id)
-        return jsonify(deleted)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rag/prompts/<prompt_id>/activate', methods=['POST'])
-def activate_prompt(prompt_id):
-    """Define um prompt como ativo para o seu escopo."""
-    try:
-        _prompt_storage.activate_prompt(prompt_id)
-        prompt = _prompt_storage.get_prompt(prompt_id)
-        if not prompt:
-            return jsonify({'error': 'Prompt não encontrado'}), 404
-        return jsonify(_prompt_storage.get_prompt_bundle(prompt['scope']))
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/api/rag/peis', methods=['GET'])
 def list_peis():
     """Lista todos os PEIs gerados"""
@@ -5060,6 +4997,7 @@ def list_peis():
         student_filter = request.args.get('student_name', '').strip()
         school_filter = request.args.get('school', '').strip()
         peis = _list_all_peis_with_metadata_fallback()
+        peis = [pei for pei in peis if _pei_visible_to_user(pei)]
         if student_id_filter or student_filter or school_filter:
             peis = [
                 p for p in peis
@@ -5084,6 +5022,9 @@ def get_pei_pdf(pei_id):
     if not pei_entry and not file_meta:
         return jsonify({"error": "PEI não encontrado"}), 404
 
+    if pei_entry and not _pei_visible_to_user(pei_entry):
+        return _scope_forbidden()
+
     object_key = file_meta.get('object_key') if file_meta else f'{pei_id}.pdf'
 
     try:
@@ -5106,6 +5047,9 @@ def get_pei_pdf(pei_id):
 @app.route('/api/rag/peis/<pei_id>', methods=['DELETE'])
 def delete_pei(pei_id):
     """Remove um PEI gerado"""
+    if _current_role() not in ADMIN_ROLES:
+        return _scope_forbidden()
+
     file_meta = _get_object_metadata(PEI_DOC_TYPE, pei_id)
     object_key = file_meta.get('object_key') if file_meta else f'{pei_id}.pdf'
     _object_storage.delete_file(PEI_STORAGE_BUCKET, object_key)
