@@ -42,7 +42,15 @@ class SchoolRecord(Base):
         nullable=True,
         index=True,
     )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Dados originais (escritos pelo usuário)
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cnpj: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    institution_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    address: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    school_registration_completed: Mapped[bool] = mapped_column(nullable=False, default=False, server_default='false')
+    # JSON anônimo para IA — sem dados pessoais (LGPD)
+    anonymized_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
@@ -58,7 +66,15 @@ class TeacherRecord(Base):
         nullable=True,
         index=True,
     )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Dados originais
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    specialization: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    school_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # JSON anônimo para IA (LGPD)
+    anonymized_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
@@ -74,7 +90,15 @@ class StudentRecord(Base):
         nullable=True,
         index=True,
     )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Dados originais
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    age: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    class_name: Mapped[Optional[str]] = mapped_column('class', Text, nullable=True)
+    grade: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    school_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    case_study_completed: Mapped[bool] = mapped_column(nullable=False, default=False, server_default='false')
+    # JSON anônimo para IA (LGPD)
+    anonymized_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
@@ -116,7 +140,20 @@ class DiaryEntryRecord(Base):
         nullable=True,
         index=True,
     )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Dados originais
+    source: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attendance: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    diary_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    student_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    open_obs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    absence_explanation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    answers: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    teacher_names: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    teacher_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    parse_warnings: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # JSON anônimo para IA (LGPD)
+    anonymized_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
 
@@ -132,7 +169,18 @@ class PDIRecord(Base):
         nullable=True,
         index=True,
     )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Dados originais
+    student_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    student_grade: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    class_name: Mapped[Optional[str]] = mapped_column('class', Text, nullable=True)
+    diagnosis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    birth_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    guardian_names: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    teacher_names: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    teacher_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    trimesters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # JSON anônimo para IA (LGPD)
+    anonymized_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
@@ -189,8 +237,8 @@ class SchoolRegistrationSubmissionRecord(Base):
 
 class ObjectStorageFileRecord(Base):
     """
-    reference_id é uma referência polimórfica (depende de doc_type),
-    portanto não possui FK formal — mantido como está.
+    reference_id é uma referência polimórfica (depende de doc_type).
+    student_id e school_id são FKs explícitas adicionadas para facilitar queries por aluno/escola.
     """
     __tablename__ = 'object_storage_files'
     __table_args__ = (
@@ -205,6 +253,18 @@ class ObjectStorageFileRecord(Base):
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    student_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey('students.id', ondelete='SET NULL', name='fk_osf_student'),
+        nullable=True,
+        index=True,
+    )
+    school_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey('schools.id', ondelete='SET NULL', name='fk_osf_school'),
+        nullable=True,
+        index=True,
+    )
     extra_json: Mapped[dict] = mapped_column('extra', JSON, nullable=False, default=dict)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -599,6 +659,41 @@ class PostgresAuthRepository:
 
 
 # ---------------------------------------------------------------------------
+# Helper de resolução de nomes de professores → IDs (usado por Diary e PDI)
+# ---------------------------------------------------------------------------
+
+def _resolve_teacher_ids(session, teacher_names: List[str], student_id: Optional[str] = None) -> List[str]:
+    """
+    Converte lista de nomes de professores em UUIDs consultando a tabela teachers.
+    Se student_id fornecido, filtra pela escola do aluno para reduzir ambiguidade.
+    """
+    import unicodedata
+
+    if not teacher_names:
+        return []
+
+    def _norm(s: str) -> str:
+        s = unicodedata.normalize('NFKD', (s or '').strip().lower())
+        s = ''.join(c for c in s if not unicodedata.combining(c))
+        return ' '.join(s.split())
+
+    school_id: Optional[str] = None
+    if student_id:
+        school_id = session.execute(
+            select(StudentRecord.school_id).where(StudentRecord.id == student_id)
+        ).scalar_one_or_none()
+
+    stmt = select(TeacherRecord.id, TeacherRecord.name)
+    if school_id:
+        stmt = stmt.where(TeacherRecord.school_id == school_id)
+
+    teacher_rows = session.execute(stmt).all()
+    name_to_id = {_norm(row.name): row.id for row in teacher_rows if row.name}
+
+    return [name_to_id[_norm(n)] for n in teacher_names if _norm(n) in name_to_id]
+
+
+# ---------------------------------------------------------------------------
 # Schools  (FK: municipio_id → municipalities)
 # ---------------------------------------------------------------------------
 
@@ -607,13 +702,19 @@ class SchoolPostgresRepository(_BaseRepository):
         super().__init__(session_factory, SchoolRecord)
 
     def _to_entity(self, record: SchoolRecord) -> Dict:
-        """municipio_id vem da coluna, não do payload."""
-        entity = dict(record.payload or {})
-        entity['id'] = record.id
-        entity['municipio_id'] = record.municipio_id or ''
-        entity['created_at'] = record.created_at
-        entity['updated_at'] = record.updated_at
-        return entity
+        return {
+            'id': record.id,
+            'municipio_id': record.municipio_id or '',
+            'name': record.name or '',
+            'cnpj': record.cnpj or '',
+            'institution_type': record.institution_type or '',
+            'address': dict(record.address or {}),
+            'notes': record.notes or '',
+            'school_registration_completed': bool(record.school_registration_completed),
+            'anonymized_data': dict(record.anonymized_data or {}),
+            'created_at': record.created_at,
+            'updated_at': record.updated_at,
+        }
 
     def create_school(
         self,
@@ -624,23 +725,37 @@ class SchoolPostgresRepository(_BaseRepository):
     ) -> Dict:
         now = now_brasilia_iso()
         school_id = school_id or str(uuid.uuid4())
-        created_at = created_at or now
-        updated_at = updated_at or now
+        data = dict(school_data)
+        for k in ('id', 'created_at', 'updated_at', 'anonymized_data'):
+            data.pop(k, None)
 
-        payload = dict(school_data)
-        payload.pop('id', None)
-        payload.pop('created_at', None)
-        payload.pop('updated_at', None)
-        # Extrai FK do payload para a coluna própria
-        municipio_id = payload.pop('municipio_id', None) or None
+        municipio_id = data.pop('municipio_id', None) or None
+        name = data.pop('name', '') or ''
+        cnpj = data.pop('cnpj', '') or ''
+        institution_type = data.pop('institution_type', '') or ''
+        address = data.pop('address', None) or None
+        notes = data.pop('notes', '') or ''
+        completed = bool(data.pop('school_registration_completed', False))
+
+        anonymized_data = {
+            'school_id': school_id,
+            'municipio_id': municipio_id or '',
+            'institution_type': institution_type,
+        }
 
         with self._session() as session:
             record = SchoolRecord(
                 id=school_id,
                 municipio_id=municipio_id,
-                payload=payload,
-                created_at=created_at,
-                updated_at=updated_at,
+                name=name,
+                cnpj=cnpj,
+                institution_type=institution_type,
+                address=address,
+                notes=notes,
+                school_registration_completed=completed,
+                anonymized_data=anonymized_data,
+                created_at=created_at or now,
+                updated_at=updated_at or now,
             )
             session.merge(record)
             return self._to_entity(record)
@@ -651,17 +766,30 @@ class SchoolPostgresRepository(_BaseRepository):
             if not record:
                 return None
 
-            payload = dict(record.payload or {})
-            payload.update(dict(school_data))
-            payload.pop('id', None)
-            payload.pop('created_at', None)
-            payload.pop('updated_at', None)
-            # Extrai FK
-            municipio_id = payload.pop('municipio_id', None)
-            if municipio_id is not None:
-                record.municipio_id = municipio_id or None
+            data = dict(school_data)
+            for k in ('id', 'created_at', 'updated_at', 'anonymized_data'):
+                data.pop(k, None)
 
-            record.payload = payload
+            if 'municipio_id' in data:
+                record.municipio_id = data.pop('municipio_id') or None
+            if 'name' in data:
+                record.name = data.pop('name')
+            if 'cnpj' in data:
+                record.cnpj = data.pop('cnpj')
+            if 'institution_type' in data:
+                record.institution_type = data.pop('institution_type')
+            if 'address' in data:
+                record.address = data.pop('address') or None
+            if 'notes' in data:
+                record.notes = data.pop('notes')
+            if 'school_registration_completed' in data:
+                record.school_registration_completed = bool(data.pop('school_registration_completed'))
+
+            record.anonymized_data = {
+                'school_id': school_id,
+                'municipio_id': record.municipio_id or '',
+                'institution_type': record.institution_type or '',
+            }
             record.updated_at = now_brasilia_iso()
             return self._to_entity(record)
 
@@ -788,15 +916,21 @@ class StudentPostgresRepository(_BaseRepository):
 
     @staticmethod
     def _student_entity(record: StudentRecord, teacher_ids: List[str]) -> Dict:
-        """Constrói o dict de entidade com colunas FK explícitas."""
-        entity = dict(record.payload or {})
-        entity['id'] = record.id
-        entity['school_id'] = record.school_id or ''
-        entity['teacher_ids'] = teacher_ids
-        entity['teacher_id'] = teacher_ids[0] if teacher_ids else ''
-        entity['created_at'] = record.created_at
-        entity['updated_at'] = record.updated_at
-        return entity
+        return {
+            'id': record.id,
+            'school_id': record.school_id or '',
+            'name': record.name or '',
+            'age': record.age or '',
+            'class': record.class_name or '',
+            'grade': record.grade or '',
+            'school_name': record.school_name or '',
+            'case_study_completed': bool(record.case_study_completed),
+            'teacher_ids': teacher_ids,
+            'teacher_id': teacher_ids[0] if teacher_ids else '',
+            'anonymized_data': dict(record.anonymized_data or {}),
+            'created_at': record.created_at,
+            'updated_at': record.updated_at,
+        }
 
     # --- CRUD público ---
 
@@ -809,30 +943,49 @@ class StudentPostgresRepository(_BaseRepository):
     ) -> Dict:
         now = now_brasilia_iso()
         student_id = student_id or str(uuid.uuid4())
-        created_at = created_at or now
-        updated_at = updated_at or now
+        data = dict(student_data)
+        for k in ('id', 'created_at', 'updated_at', 'anonymized_data'):
+            data.pop(k, None)
 
-        payload = dict(student_data)
-        payload.pop('id', None)
-        payload.pop('created_at', None)
-        payload.pop('updated_at', None)
-        # Extrai FKs do payload para colunas próprias
-        school_id = payload.pop('school_id', None) or None
-        raw_teacher_ids = payload.pop('teacher_ids', []) or []
-        # Remove campos legados de teacher do payload
-        payload.pop('teacher_id', None)
+        school_id = data.pop('school_id', None) or None
+        raw_teacher_ids = data.pop('teacher_ids', []) or []
+        data.pop('teacher_id', None)
+
+        name = data.pop('name', None) or data.pop('studentName', '') or ''
+        age = data.pop('age', None) or data.pop('studentAge', '') or ''
+        class_name = data.pop('class', None) or data.pop('className', '') or ''
+        grade = data.pop('grade', None) or data.pop('schoolYear', '') or ''
+        school_name = data.pop('school_name', None) or data.pop('schoolName', '') or ''
+        completed = bool(data.pop('case_study_completed', False))
+        # consume leftover aliases
+        for k in ('studentName', 'studentAge', 'className', 'schoolYear', 'schoolName'):
+            data.pop(k, None)
+
+        teacher_ids = [str(t) for t in raw_teacher_ids if t]
+        anonymized_data = {
+            'student_id': student_id,
+            'school_id': school_id or '',
+            'age': age,
+            'grade': grade,
+            'class': class_name,
+        }
 
         with self._session() as session:
             record = StudentRecord(
                 id=student_id,
                 school_id=school_id,
-                payload=payload,
-                created_at=created_at,
-                updated_at=updated_at,
+                name=name,
+                age=age,
+                class_name=class_name,
+                grade=grade,
+                school_name=school_name,
+                case_study_completed=completed,
+                anonymized_data=anonymized_data,
+                created_at=created_at or now,
+                updated_at=updated_at or now,
             )
             session.merge(record)
             session.flush()
-            teacher_ids = [str(t) for t in raw_teacher_ids if t]
             self._sync_teacher_links(session, student_id, teacher_ids)
             return self._student_entity(record, teacher_ids)
 
@@ -842,19 +995,45 @@ class StudentPostgresRepository(_BaseRepository):
             if not record:
                 return None
 
-            payload = dict(record.payload or {})
-            payload.update(dict(student_data))
-            payload.pop('id', None)
-            payload.pop('created_at', None)
-            payload.pop('updated_at', None)
-            # Extrai FKs
-            school_id = payload.pop('school_id', None)
-            raw_teacher_ids = payload.pop('teacher_ids', None)
-            payload.pop('teacher_id', None)
+            data = dict(student_data)
+            for k in ('id', 'created_at', 'updated_at', 'anonymized_data'):
+                data.pop(k, None)
 
-            if school_id is not None:
-                record.school_id = school_id or None
-            record.payload = payload
+            raw_teacher_ids = data.pop('teacher_ids', None)
+            data.pop('teacher_id', None)
+
+            if 'school_id' in data:
+                record.school_id = data.pop('school_id') or None
+            if 'name' in data:
+                record.name = data.pop('name')
+            elif 'studentName' in data:
+                record.name = data.pop('studentName')
+            if 'age' in data:
+                record.age = data.pop('age')
+            elif 'studentAge' in data:
+                record.age = data.pop('studentAge')
+            if 'class' in data:
+                record.class_name = data.pop('class')
+            elif 'className' in data:
+                record.class_name = data.pop('className')
+            if 'grade' in data:
+                record.grade = data.pop('grade')
+            elif 'schoolYear' in data:
+                record.grade = data.pop('schoolYear')
+            if 'school_name' in data:
+                record.school_name = data.pop('school_name')
+            elif 'schoolName' in data:
+                record.school_name = data.pop('schoolName')
+            if 'case_study_completed' in data:
+                record.case_study_completed = bool(data.pop('case_study_completed'))
+
+            record.anonymized_data = {
+                'student_id': student_id,
+                'school_id': record.school_id or '',
+                'age': record.age or '',
+                'grade': record.grade or '',
+                'class': record.class_name or '',
+            }
             record.updated_at = now_brasilia_iso()
             session.flush()
 
@@ -989,7 +1168,6 @@ class StudentPostgresRepository(_BaseRepository):
         with self._session() as session:
             rows = session.execute(select(StudentRecord)).scalars().all()
 
-            # Batch de links
             student_ids = [r.id for r in rows]
             link_rows = session.execute(
                 select(TeacherStudentLinkRecord).where(
@@ -1003,8 +1181,7 @@ class StudentPostgresRepository(_BaseRepository):
 
         matches = []
         for row in rows:
-            student_name = dict(row.payload or {}).get('name') or dict(row.payload or {}).get('studentName') or ''
-            if self._normalize_name(student_name) == normalized_candidate:
+            if self._normalize_name(row.name or '') == normalized_candidate:
                 teacher_ids = teacher_ids_map.get(row.id, [])
                 matches.append(self._student_entity(row, teacher_ids))
 
@@ -1030,13 +1207,19 @@ class TeacherPostgresRepository(_BaseRepository):
         super().__init__(session_factory, TeacherRecord)
 
     def _to_entity(self, record: TeacherRecord) -> Dict:
-        """school_id vem da coluna, não do payload."""
-        entity = dict(record.payload or {})
-        entity['id'] = record.id
-        entity['school_id'] = record.school_id or ''
-        entity['created_at'] = record.created_at
-        entity['updated_at'] = record.updated_at
-        return entity
+        return {
+            'id': record.id,
+            'school_id': record.school_id or '',
+            'name': record.name or '',
+            'email': record.email or '',
+            'phone': record.phone or '',
+            'specialization': record.specialization or '',
+            'notes': record.notes or '',
+            'school_name': record.school_name or '',
+            'anonymized_data': dict(record.anonymized_data or {}),
+            'created_at': record.created_at,
+            'updated_at': record.updated_at,
+        }
 
     def create_teacher(
         self,
@@ -1047,23 +1230,37 @@ class TeacherPostgresRepository(_BaseRepository):
     ) -> Dict:
         now = now_brasilia_iso()
         teacher_id = teacher_id or str(uuid.uuid4())
-        created_at = created_at or now
-        updated_at = updated_at or now
+        data = dict(teacher_data)
+        for k in ('id', 'created_at', 'updated_at', 'anonymized_data'):
+            data.pop(k, None)
 
-        payload = dict(teacher_data)
-        payload.pop('id', None)
-        payload.pop('created_at', None)
-        payload.pop('updated_at', None)
-        # Extrai FK
-        school_id = payload.pop('school_id', None) or None
+        school_id = data.pop('school_id', None) or None
+        name = data.pop('name', '') or ''
+        email = data.pop('email', '') or ''
+        phone = data.pop('phone', '') or ''
+        specialization = data.pop('specialization', '') or ''
+        notes = data.pop('notes', '') or ''
+        school_name = data.pop('school_name', '') or ''
+
+        anonymized_data = {
+            'teacher_id': teacher_id,
+            'school_id': school_id or '',
+            'specialization': specialization,
+        }
 
         with self._session() as session:
             record = TeacherRecord(
                 id=teacher_id,
                 school_id=school_id,
-                payload=payload,
-                created_at=created_at,
-                updated_at=updated_at,
+                name=name,
+                email=email,
+                phone=phone,
+                specialization=specialization,
+                notes=notes,
+                school_name=school_name,
+                anonymized_data=anonymized_data,
+                created_at=created_at or now,
+                updated_at=updated_at or now,
             )
             session.merge(record)
             return self._to_entity(record)
@@ -1074,16 +1271,24 @@ class TeacherPostgresRepository(_BaseRepository):
             if not record:
                 return None
 
-            payload = dict(teacher_data)
-            payload.pop('id', None)
-            payload.pop('created_at', None)
-            payload.pop('updated_at', None)
-            # Extrai FK
-            school_id = payload.pop('school_id', None)
-            if school_id is not None:
-                record.school_id = school_id or None
+            data = dict(teacher_data)
+            for k in ('id', 'created_at', 'updated_at', 'anonymized_data'):
+                data.pop(k, None)
 
-            record.payload = payload
+            if 'school_id' in data:
+                record.school_id = data.pop('school_id') or None
+            record.name = data.get('name', record.name) or record.name
+            record.email = data.get('email', record.email)
+            record.phone = data.get('phone', record.phone)
+            record.specialization = data.get('specialization', record.specialization)
+            record.notes = data.get('notes', record.notes)
+            record.school_name = data.get('school_name', record.school_name)
+
+            record.anonymized_data = {
+                'teacher_id': teacher_id,
+                'school_id': record.school_id or '',
+                'specialization': record.specialization or '',
+            }
             record.updated_at = now_brasilia_iso()
             return self._to_entity(record)
 
@@ -1237,13 +1442,26 @@ class DiaryPostgresRepository(_BaseRepository):
         super().__init__(session_factory, DiaryEntryRecord)
 
     def _to_entity(self, record: DiaryEntryRecord) -> Dict:
-        """student_id vem da coluna, não do payload."""
-        entity = dict(record.payload or {})
-        entity['id'] = record.id
-        entity['student_id'] = record.student_id or ''
-        entity['created_at'] = record.created_at
-        entity['updated_at'] = record.updated_at
-        return entity
+        teacher_names = list(record.teacher_names or [])
+        return {
+            'id': record.id,
+            'student_id': record.student_id or '',
+            'source': record.source or '',
+            'status': record.status or '',
+            'attendance': record.attendance or '',
+            'diary_date': record.diary_date or '',
+            'student_name': record.student_name or '',
+            'open_obs': record.open_obs or '',
+            'absence_explanation': record.absence_explanation or '',
+            'answers': dict(record.answers or {}),
+            'teachers': teacher_names,
+            'teacher_names': teacher_names,
+            'teacher_ids': list(record.teacher_ids or []),
+            'parse_warnings': list(record.parse_warnings or []),
+            'anonymized_data': dict(record.anonymized_data or {}),
+            'created_at': record.created_at,
+            'updated_at': record.updated_at or '',
+        }
 
     def _normalize_name(self, value: str) -> str:
         import unicodedata
@@ -1280,28 +1498,46 @@ class DiaryPostgresRepository(_BaseRepository):
     ) -> Dict:
         now = now_brasilia_iso()
         entry_id = entry_id or str(uuid.uuid4())
-        created_at = created_at or now
-
-        # student_id fica na coluna; demais dados ficam no payload
-        payload = {
-            'student_name': student_name,
-            'teachers': teachers,
-            'diary_date': diary_date,
-            'answers': answers,
-            'open_obs': open_obs,
-            'attendance': attendance,
-            'absence_explanation': absence_explanation,
-            'status': status,
-            'source': source,
-            'parse_warnings': parse_warnings or [],
-        }
 
         with self._session() as session:
+            teacher_ids = _resolve_teacher_ids(session, teachers or [], student_id)
+
+            school_id: Optional[str] = None
+            if student_id:
+                school_id = session.execute(
+                    select(StudentRecord.school_id).where(StudentRecord.id == student_id)
+                ).scalar_one_or_none()
+
+            anonymized_data = {
+                'student_id': student_id or '',
+                'teacher_ids': teacher_ids,
+                'school_id': school_id or '',
+                'diary_date': diary_date,
+                'attendance': attendance,
+                'answers': dict(answers or {}),
+                'open_obs': open_obs or '',
+                'absence_explanation': absence_explanation or '',
+                'parse_warnings': list(parse_warnings or []),
+                'status': status,
+                'source': source,
+            }
+
             record = DiaryEntryRecord(
                 id=entry_id,
                 student_id=student_id or None,
-                payload=payload,
-                created_at=created_at,
+                source=source,
+                status=status,
+                attendance=attendance,
+                diary_date=diary_date,
+                student_name=student_name,
+                open_obs=open_obs,
+                absence_explanation=absence_explanation,
+                answers=dict(answers or {}),
+                teacher_names=list(teachers or []),
+                teacher_ids=teacher_ids,
+                parse_warnings=list(parse_warnings or []),
+                anonymized_data=anonymized_data,
+                created_at=created_at or now,
                 updated_at=updated_at,
             )
             session.merge(record)
@@ -1359,22 +1595,40 @@ class DiaryPostgresRepository(_BaseRepository):
             if not record:
                 return None
 
-            # Atualiza coluna FK
             if student_id is not None:
                 record.student_id = student_id or None
 
-            record.payload = {
-                **dict(record.payload or {}),
-                'student_name': student_name,
-                'teachers': teachers,
+            teacher_ids = _resolve_teacher_ids(session, teachers or [], record.student_id)
+
+            school_id: Optional[str] = None
+            if record.student_id:
+                school_id = session.execute(
+                    select(StudentRecord.school_id).where(StudentRecord.id == record.student_id)
+                ).scalar_one_or_none()
+
+            record.source = source
+            record.status = status
+            record.attendance = attendance
+            record.diary_date = diary_date
+            record.student_name = student_name
+            record.open_obs = open_obs
+            record.absence_explanation = absence_explanation
+            record.answers = dict(answers or {})
+            record.teacher_names = list(teachers or [])
+            record.teacher_ids = teacher_ids
+            record.parse_warnings = list(parse_warnings or [])
+            record.anonymized_data = {
+                'student_id': record.student_id or '',
+                'teacher_ids': teacher_ids,
+                'school_id': school_id or '',
                 'diary_date': diary_date,
-                'answers': answers,
-                'open_obs': open_obs,
                 'attendance': attendance,
-                'absence_explanation': absence_explanation,
+                'answers': dict(answers or {}),
+                'open_obs': open_obs or '',
+                'absence_explanation': absence_explanation or '',
+                'parse_warnings': list(parse_warnings or []),
                 'status': status,
                 'source': source,
-                'parse_warnings': parse_warnings or [],
             }
             record.updated_at = now_brasilia_iso()
             return self._to_entity(record)
@@ -1498,9 +1752,7 @@ class DiaryPostgresRepository(_BaseRepository):
         return self._group_into_summaries([self._to_entity(row) for row in rows])
 
     def link_entries_to_student(self, student_id: str, student_name: str) -> int:
-        """
-        Vincula entradas sem student_id à coluna FK correta (não mais ao payload).
-        """
+        """Vincula entradas sem student_id à coluna FK pelo nome do aluno."""
         if not student_id or not student_name:
             return 0
 
@@ -1508,18 +1760,14 @@ class DiaryPostgresRepository(_BaseRepository):
         linked_count = 0
 
         with self._session() as session:
-            rows = session.execute(select(DiaryEntryRecord)).scalars().all()
+            rows = session.execute(
+                select(DiaryEntryRecord).where(DiaryEntryRecord.student_id.is_(None))
+            ).scalars().all()
             for row in rows:
-                if row.student_id:
+                if self._normalize_name(row.student_name or '') != normalized_name:
                     continue
-                payload = dict(row.payload or {})
-                if self._normalize_name(payload.get('student_name', '')) != normalized_name:
-                    continue
-
                 row.student_id = student_id
-                # Mantém student_name atualizado no payload
-                payload['student_name'] = student_name
-                row.payload = payload
+                row.student_name = student_name
                 linked_count += 1
 
         return linked_count
@@ -1534,13 +1782,26 @@ class PDIPostgresRepository(_BaseRepository):
         super().__init__(session_factory, PDIRecord)
 
     def _to_entity(self, record: PDIRecord) -> Dict:
-        """student_id vem da coluna, não do payload."""
-        entity = dict(record.payload or {})
-        entity['id'] = record.id
-        entity['student_id'] = record.student_id or ''
-        entity['created_at'] = record.created_at
-        entity['updated_at'] = record.updated_at
-        return entity
+        teacher_names = list(record.teacher_names or [])
+        guardian_names = list(record.guardian_names or [])
+        return {
+            'id': record.id,
+            'student_id': record.student_id or '',
+            'student_name': record.student_name or '',
+            'student_grade': record.student_grade or '',
+            'class': record.class_name or '',
+            'diagnosis': record.diagnosis or '',
+            'birth_date': record.birth_date or '',
+            'guardians': guardian_names,
+            'guardian_names': guardian_names,
+            'teachers': teacher_names,
+            'teacher_names': teacher_names,
+            'teacher_ids': list(record.teacher_ids or []),
+            'trimesters': dict(record.trimesters or {}),
+            'anonymized_data': dict(record.anonymized_data or {}),
+            'created_at': record.created_at,
+            'updated_at': record.updated_at,
+        }
 
     def _normalize_name(self, value: str) -> str:
         import unicodedata
@@ -1575,31 +1836,46 @@ class PDIPostgresRepository(_BaseRepository):
     ) -> Dict:
         now = now_brasilia_iso()
         pdi_id = pdi_id or str(uuid.uuid4())
-        created_at = created_at or now
-        updated_at = updated_at or now
 
-        # student_id fica na coluna; demais dados ficam no payload
-        payload = {
-            'student_name': student_name,
-            'birth_date': birth_date,
-            'guardians': guardians,
-            'diagnosis': diagnosis,
-            'class': class_name,
-            'teachers': teachers,
-            'student_grade': student_grade or '',
-            'trimesters': normalize_trimesters(
-                trimesters,
-                subject_ids=get_pdi_subject_ids_for_grade(student_grade),
-            ),
-        }
+        normalized_trimesters = normalize_trimesters(
+            trimesters,
+            subject_ids=get_pdi_subject_ids_for_grade(student_grade),
+        )
 
         with self._session() as session:
+            teacher_ids = _resolve_teacher_ids(session, teachers or [], student_id)
+
+            school_id: Optional[str] = None
+            if student_id:
+                school_id = session.execute(
+                    select(StudentRecord.school_id).where(StudentRecord.id == student_id)
+                ).scalar_one_or_none()
+
+            anonymized_data = {
+                'student_id': student_id or '',
+                'teacher_ids': teacher_ids,
+                'school_id': school_id or '',
+                'student_grade': student_grade or '',
+                'class': class_name or '',
+                'diagnosis': diagnosis or '',
+                'trimesters': normalized_trimesters,
+            }
+
             record = PDIRecord(
                 id=pdi_id,
                 student_id=student_id or None,
-                payload=payload,
-                created_at=created_at,
-                updated_at=updated_at,
+                student_name=student_name,
+                student_grade=student_grade or '',
+                class_name=class_name,
+                diagnosis=diagnosis,
+                birth_date=birth_date,
+                guardian_names=list(guardians or []),
+                teacher_names=list(teachers or []),
+                teacher_ids=teacher_ids,
+                trimesters=normalized_trimesters,
+                anonymized_data=anonymized_data,
+                created_at=created_at or now,
+                updated_at=updated_at or now,
             )
             session.merge(record)
             return self._to_entity(record)
@@ -1622,25 +1898,41 @@ class PDIPostgresRepository(_BaseRepository):
             if not record:
                 return None
 
-            # Atualiza coluna FK
             if student_id is not None:
                 record.student_id = student_id or None
 
-            payload = dict(record.payload or {})
-            payload.update({
-                'student_name': student_name,
-                'birth_date': birth_date,
-                'guardians': guardians,
-                'diagnosis': diagnosis,
-                'class': class_name,
-                'teachers': teachers,
-                'student_grade': student_grade or payload.get('student_grade') or '',
-                'trimesters': normalize_trimesters(
-                    trimesters,
-                    subject_ids=get_pdi_subject_ids_for_grade(student_grade or payload.get('student_grade')),
-                ),
-            })
-            record.payload = payload
+            effective_grade = student_grade or record.student_grade or ''
+            normalized_trimesters = normalize_trimesters(
+                trimesters,
+                subject_ids=get_pdi_subject_ids_for_grade(effective_grade),
+            )
+
+            teacher_ids = _resolve_teacher_ids(session, teachers or [], record.student_id)
+
+            school_id: Optional[str] = None
+            if record.student_id:
+                school_id = session.execute(
+                    select(StudentRecord.school_id).where(StudentRecord.id == record.student_id)
+                ).scalar_one_or_none()
+
+            record.student_name = student_name
+            record.student_grade = effective_grade
+            record.class_name = class_name
+            record.diagnosis = diagnosis
+            record.birth_date = birth_date
+            record.guardian_names = list(guardians or [])
+            record.teacher_names = list(teachers or [])
+            record.teacher_ids = teacher_ids
+            record.trimesters = normalized_trimesters
+            record.anonymized_data = {
+                'student_id': record.student_id or '',
+                'teacher_ids': teacher_ids,
+                'school_id': school_id or '',
+                'student_grade': effective_grade,
+                'class': class_name or '',
+                'diagnosis': diagnosis or '',
+                'trimesters': normalized_trimesters,
+            }
             record.updated_at = now_brasilia_iso()
             return self._to_entity(record)
 
@@ -1649,16 +1941,14 @@ class PDIPostgresRepository(_BaseRepository):
         with self._session() as session:
             rows = session.execute(select(PDIRecord)).scalars().all()
             for row in rows:
-                payload = dict(row.payload or {})
                 normalized_trimesters = normalize_trimesters(
-                    payload.get('trimesters'),
-                    subject_ids=get_pdi_subject_ids_for_grade(payload.get('student_grade')),
+                    row.trimesters,
+                    subject_ids=get_pdi_subject_ids_for_grade(row.student_grade),
                 )
-                if normalized_trimesters == payload.get('trimesters'):
+                if normalized_trimesters == (row.trimesters or {}):
                     continue
 
-                payload['trimesters'] = normalized_trimesters
-                row.payload = payload
+                row.trimesters = normalized_trimesters
                 row.updated_at = now_brasilia_iso()
                 updated_count += 1
 
@@ -1776,9 +2066,7 @@ class PDIPostgresRepository(_BaseRepository):
         return self._delete(pdi_id)
 
     def link_pdis_to_student(self, student_id: str, student_name: str) -> int:
-        """
-        Vincula PDIs sem student_id à coluna FK correta (não mais ao payload).
-        """
+        """Vincula PDIs sem student_id à coluna FK pelo nome do aluno."""
         if not student_id or not student_name:
             return 0
 
@@ -1786,17 +2074,14 @@ class PDIPostgresRepository(_BaseRepository):
         linked_count = 0
 
         with self._session() as session:
-            rows = session.execute(select(PDIRecord)).scalars().all()
+            rows = session.execute(
+                select(PDIRecord).where(PDIRecord.student_id.is_(None))
+            ).scalars().all()
             for row in rows:
-                if row.student_id:
+                if self._normalize_name(row.student_name or '') != normalized_name:
                     continue
-                payload = dict(row.payload or {})
-                if self._normalize_name(payload.get('student_name', '')) != normalized_name:
-                    continue
-
                 row.student_id = student_id
-                payload['student_name'] = student_name
-                row.payload = payload
+                row.student_name = student_name
                 row.updated_at = now_brasilia_iso()
                 linked_count += 1
 
@@ -1984,6 +2269,8 @@ class ObjectStorageMetadataPostgresRepository:
             'original_filename': record.original_filename,
             'mime_type': record.mime_type,
             'size_bytes': record.size_bytes,
+            'student_id': record.student_id or '',
+            'school_id': record.school_id or '',
             'extra': dict(record.extra_json or {}),
             'created_at': record.created_at,
             'updated_at': record.updated_at,
@@ -1999,6 +2286,8 @@ class ObjectStorageMetadataPostgresRepository:
         mime_type: str,
         size_bytes: int,
         extra: Optional[Dict] = None,
+        student_id: Optional[str] = None,
+        school_id: Optional[str] = None,
     ) -> Dict:
         now = now_brasilia_iso()
         doc_type = str(doc_type or '').strip()
@@ -2022,6 +2311,8 @@ class ObjectStorageMetadataPostgresRepository:
                     original_filename=original_filename,
                     mime_type=mime_type,
                     size_bytes=max(0, int(size_bytes or 0)),
+                    student_id=student_id or None,
+                    school_id=school_id or None,
                     extra_json=dict(extra or {}),
                     created_at=now,
                     updated_at=now,
@@ -2035,6 +2326,10 @@ class ObjectStorageMetadataPostgresRepository:
             record.original_filename = original_filename
             record.mime_type = mime_type
             record.size_bytes = max(0, int(size_bytes or 0))
+            if student_id is not None:
+                record.student_id = student_id or None
+            if school_id is not None:
+                record.school_id = school_id or None
             record.extra_json = dict(extra or {})
             record.updated_at = now
             session.flush()
@@ -2461,6 +2756,195 @@ def _run_migration(engine) -> None:
         "UPDATE public.chat_messages SET user_id = NULL WHERE user_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.user_profiles WHERE id = chat_messages.user_id)",
     ]
 
+    # ── FASE 5 — cria colunas individuais (idempotente) ────────────────────
+    normalize_schema_stmts = [
+        # schools
+        "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS name TEXT",
+        "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS cnpj TEXT",
+        "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS institution_type TEXT",
+        "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS address JSON",
+        "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS notes TEXT",
+        "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS school_registration_completed BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS anonymized_data JSON",
+        # teachers
+        "ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS name TEXT",
+        "ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS email TEXT",
+        "ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS phone TEXT",
+        "ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS specialization TEXT",
+        "ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS notes TEXT",
+        "ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS school_name TEXT",
+        "ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS anonymized_data JSON",
+        # students
+        "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS name TEXT",
+        "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS age TEXT",
+        'ALTER TABLE public.students ADD COLUMN IF NOT EXISTS "class" TEXT',
+        "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS grade TEXT",
+        "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS school_name TEXT",
+        "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS case_study_completed BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS anonymized_data JSON",
+        # diary_entries
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS source TEXT",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS status TEXT",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS attendance TEXT",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS diary_date VARCHAR(10)",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS student_name TEXT",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS open_obs TEXT",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS absence_explanation TEXT",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS answers JSON",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS teacher_names JSON",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS teacher_ids JSON",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS parse_warnings JSON",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS anonymized_data JSON",
+        # pdis
+        "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS student_name TEXT",
+        "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS student_grade TEXT",
+        'ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS "class" TEXT',
+        "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS diagnosis TEXT",
+        "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS birth_date VARCHAR(20)",
+        "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS guardian_names JSON",
+        "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS teacher_names JSON",
+        "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS teacher_ids JSON",
+        "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS trimesters JSON",
+        "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS anonymized_data JSON",
+        # object_storage_files
+        "ALTER TABLE public.object_storage_files ADD COLUMN IF NOT EXISTS student_id VARCHAR(64)",
+        "ALTER TABLE public.object_storage_files ADD COLUMN IF NOT EXISTS school_id VARCHAR(64)",
+    ]
+
+    # ── FASE 6 — backfill das colunas a partir do payload JSON ───────────────
+    # payload é tipo json, então usamos payload->>'campo' para texto e payload->'campo' para json
+    normalize_backfill_stmts = [
+        # schools
+        """
+        UPDATE public.schools SET
+            name                         = COALESCE(name, payload->>'name'),
+            cnpj                         = COALESCE(cnpj, payload->>'cnpj'),
+            institution_type             = COALESCE(institution_type, payload->>'institution_type'),
+            address                      = COALESCE(address, payload->'address'),
+            notes                        = COALESCE(notes, payload->>'notes'),
+            school_registration_completed = CASE
+                WHEN school_registration_completed = FALSE
+                 AND payload->>'school_registration_completed' = 'true'
+                THEN TRUE ELSE school_registration_completed END,
+            anonymized_data = COALESCE(anonymized_data, json_build_object(
+                'school_id', id,
+                'municipio_id', COALESCE(municipio_id, ''),
+                'institution_type', COALESCE(payload->>'institution_type', '')
+            ))
+        WHERE payload IS NOT NULL
+        """,
+        # teachers
+        """
+        UPDATE public.teachers SET
+            name           = COALESCE(name, payload->>'name'),
+            email          = COALESCE(email, payload->>'email'),
+            phone          = COALESCE(phone, payload->>'phone'),
+            specialization = COALESCE(specialization, payload->>'specialization'),
+            notes          = COALESCE(notes, payload->>'notes'),
+            school_name    = COALESCE(school_name, payload->>'school_name'),
+            anonymized_data = COALESCE(anonymized_data, json_build_object(
+                'teacher_id', id,
+                'school_id', COALESCE(school_id, ''),
+                'specialization', COALESCE(payload->>'specialization', '')
+            ))
+        WHERE payload IS NOT NULL
+        """,
+        # students
+        """
+        UPDATE public.students SET
+            name                  = COALESCE(name, payload->>'name', payload->>'studentName'),
+            age                   = COALESCE(age, payload->>'age', payload->>'studentAge'),
+            "class"               = COALESCE("class", payload->>'class', payload->>'className'),
+            grade                 = COALESCE(grade, payload->>'grade', payload->>'schoolYear'),
+            school_name           = COALESCE(school_name, payload->>'school_name', payload->>'schoolName'),
+            case_study_completed  = CASE
+                WHEN case_study_completed = FALSE
+                 AND payload->>'case_study_completed' = 'true'
+                THEN TRUE ELSE case_study_completed END,
+            anonymized_data = COALESCE(anonymized_data, json_build_object(
+                'student_id', id,
+                'school_id', COALESCE(school_id, ''),
+                'age', COALESCE(payload->>'age', payload->>'studentAge', ''),
+                'grade', COALESCE(payload->>'grade', payload->>'schoolYear', ''),
+                'class', COALESCE(payload->>'class', payload->>'className', '')
+            ))
+        WHERE payload IS NOT NULL
+        """,
+        # diary_entries
+        """
+        UPDATE public.diary_entries SET
+            source               = COALESCE(source, payload->>'source'),
+            status               = COALESCE(status, payload->>'status'),
+            attendance           = COALESCE(attendance, payload->>'attendance'),
+            diary_date           = COALESCE(diary_date, payload->>'diary_date'),
+            student_name         = COALESCE(student_name, payload->>'student_name'),
+            open_obs             = COALESCE(open_obs, payload->>'open_obs'),
+            absence_explanation  = COALESCE(absence_explanation, payload->>'absence_explanation'),
+            answers              = COALESCE(answers, payload->'answers'),
+            teacher_names        = COALESCE(teacher_names,
+                CASE WHEN json_typeof(payload->'teachers') = 'array' THEN payload->'teachers' ELSE NULL END),
+            parse_warnings       = COALESCE(parse_warnings,
+                CASE WHEN json_typeof(payload->'parse_warnings') = 'array' THEN payload->'parse_warnings' ELSE '[]'::json END),
+            anonymized_data = COALESCE(anonymized_data, json_build_object(
+                'student_id', COALESCE(student_id, ''),
+                'teacher_ids', '[]'::json,
+                'school_id', '',
+                'diary_date', COALESCE(payload->>'diary_date', ''),
+                'attendance', COALESCE(payload->>'attendance', ''),
+                'answers', COALESCE(payload->'answers', '{}'::json),
+                'open_obs', COALESCE(payload->>'open_obs', ''),
+                'absence_explanation', COALESCE(payload->>'absence_explanation', ''),
+                'parse_warnings', COALESCE(CASE WHEN json_typeof(payload->'parse_warnings') = 'array' THEN payload->'parse_warnings' ELSE NULL END, '[]'::json),
+                'status', COALESCE(payload->>'status', ''),
+                'source', COALESCE(payload->>'source', '')
+            ))
+        WHERE payload IS NOT NULL
+        """,
+        # pdis
+        """
+        UPDATE public.pdis SET
+            student_name  = COALESCE(student_name, payload->>'student_name'),
+            student_grade = COALESCE(student_grade, payload->>'student_grade', payload->>'grade'),
+            "class"       = COALESCE("class", payload->>'class'),
+            diagnosis     = COALESCE(diagnosis, payload->>'diagnosis'),
+            birth_date    = COALESCE(birth_date, payload->>'birth_date'),
+            guardian_names = COALESCE(guardian_names,
+                CASE WHEN json_typeof(payload->'guardians') = 'array' THEN payload->'guardians' ELSE NULL END),
+            teacher_names  = COALESCE(teacher_names,
+                CASE WHEN json_typeof(payload->'teachers') = 'array' THEN payload->'teachers' ELSE NULL END),
+            trimesters     = COALESCE(trimesters,
+                CASE WHEN json_typeof(payload->'trimesters') = 'object' THEN payload->'trimesters' ELSE NULL END),
+            anonymized_data = COALESCE(anonymized_data, json_build_object(
+                'student_id', COALESCE(student_id, ''),
+                'teacher_ids', '[]'::json,
+                'school_id', '',
+                'student_grade', COALESCE(payload->>'student_grade', payload->>'grade', ''),
+                'class', COALESCE(payload->>'class', ''),
+                'diagnosis', COALESCE(payload->>'diagnosis', ''),
+                'trimesters', COALESCE(CASE WHEN json_typeof(payload->'trimesters') = 'object' THEN payload->'trimesters' ELSE NULL END, '{}'::json)
+            ))
+        WHERE payload IS NOT NULL
+        """,
+        # object_storage_files — vincula student_id pela coluna extra.student_name via students.name
+        """
+        UPDATE public.object_storage_files osf
+        SET student_id = s.id
+        FROM public.students s
+        WHERE osf.student_id IS NULL
+          AND osf.extra->>'student_name' IS NOT NULL
+          AND lower(trim(s.name)) = lower(trim(osf.extra->>'student_name'))
+        """,
+    ]
+
+    # ── FASE 7 — remove colunas payload (após backfill concluído) ─────────
+    drop_payload_stmts = [
+        "ALTER TABLE public.schools DROP COLUMN IF EXISTS payload",
+        "ALTER TABLE public.teachers DROP COLUMN IF EXISTS payload",
+        "ALTER TABLE public.students DROP COLUMN IF EXISTS payload",
+        "ALTER TABLE public.diary_entries DROP COLUMN IF EXISTS payload",
+        "ALTER TABLE public.pdis DROP COLUMN IF EXISTS payload",
+    ]
+
     # ── FASE 3c — cria/recria as FK constraints ──────────────────────────────
     constraint_stmts = [
         # schools
@@ -2506,6 +2990,11 @@ def _run_migration(engine) -> None:
         "ALTER TABLE public.chat_messages ADD CONSTRAINT fk_chat_messages_session FOREIGN KEY (session_id) REFERENCES public.chat_sessions(id) ON DELETE CASCADE",
         "ALTER TABLE public.chat_messages DROP CONSTRAINT IF EXISTS fk_chat_messages_user",
         "ALTER TABLE public.chat_messages ADD CONSTRAINT fk_chat_messages_user FOREIGN KEY (user_id) REFERENCES public.user_profiles(id) ON DELETE SET NULL",
+        # object_storage_files — FKs para student e school
+        "ALTER TABLE public.object_storage_files DROP CONSTRAINT IF EXISTS fk_osf_student",
+        "ALTER TABLE public.object_storage_files ADD CONSTRAINT fk_osf_student FOREIGN KEY (student_id) REFERENCES public.students(id) ON DELETE SET NULL",
+        "ALTER TABLE public.object_storage_files DROP CONSTRAINT IF EXISTS fk_osf_school",
+        "ALTER TABLE public.object_storage_files ADD CONSTRAINT fk_osf_school FOREIGN KEY (school_id) REFERENCES public.schools(id) ON DELETE SET NULL",
     ]
 
     def run_batch(stmts, label: str) -> None:
@@ -2516,12 +3005,15 @@ def _run_migration(engine) -> None:
         except Exception as exc:
             print(f"[postgres_repositories] aviso na fase '{label}': {exc}")
 
-    run_batch(index_stmts,        "indexes")
-    run_batch(schema_stmts,       "schema")
-    run_batch(backfill_stmts,     "backfill")
-    run_batch(cleanup_stmts,      "json-cleanup")
+    run_batch(index_stmts,          "indexes")
+    run_batch(schema_stmts,         "schema")
+    run_batch(backfill_stmts,       "backfill")
+    run_batch(cleanup_stmts,        "json-cleanup")
+    run_batch(normalize_schema_stmts, "normalize-schema")
+    run_batch(normalize_backfill_stmts, "normalize-backfill")
+    run_batch(drop_payload_stmts,   "drop-payload")
     run_batch(orphan_cleanup_stmts, "orphan-cleanup")
-    run_batch(constraint_stmts,   "constraints")
+    run_batch(constraint_stmts,     "constraints")
 
 
 def create_postgres_repositories(database_url: str):
