@@ -632,6 +632,63 @@ class PostgresAuthRepository:
 
             record.role = role
             record.updated_at = now_brasilia_iso()
+            return self._sanitize_user(record)
+
+    def update_evaluator_scope(self, user_id: str, evaluator_scope: Dict) -> Optional[Dict]:
+        with self._session() as session:
+            record = session.get(UserProfileRecord, str(user_id or '').strip())
+            if not record:
+                return None
+
+            if (record.role or '').strip().lower() != 'avaliador':
+                raise ValueError('Escopo só pode ser atualizado para usuários avaliador')
+
+            record.evaluator_scope = evaluator_scope
+            record.updated_at = now_brasilia_iso()
+            session.flush()
+            return self._sanitize_user(record)
+
+    def update_user(
+        self,
+        user_id: str,
+        name: Optional[str] = None,
+        role: Optional[str] = None,
+        municipio_id: Optional[str] = None,
+        school_id: Optional[str] = None,
+        teacher_id: Optional[str] = None,
+        evaluator_scope: Optional[dict] = None,
+        is_active: Optional[bool] = None,
+    ) -> Optional[Dict]:
+        with self._session() as session:
+            record = session.get(UserProfileRecord, str(user_id or '').strip())
+            if not record:
+                return None
+
+            if role is not None:
+                record.role = self._validate_role(role)
+
+            if name is not None:
+                record.full_name = (name or '').strip()
+
+            if municipio_id is not None:
+                record.municipio_id = (municipio_id or '').strip() or None
+
+            if school_id is not None:
+                record.school_id = (school_id or '').strip() or None
+
+            if teacher_id is not None:
+                record.teacher_id = (teacher_id or '').strip() or None
+
+            if evaluator_scope is not None:
+                record.evaluator_scope = evaluator_scope
+
+            if is_active is not None:
+                record.is_active = bool(is_active)
+
+            # Validar escopo geral do usuário
+            self._validate_scope(record.role, record.municipio_id or '', record.school_id or '')
+
+            record.updated_at = now_brasilia_iso()
             session.flush()
             return self._sanitize_user(record)
 
@@ -1265,6 +1322,37 @@ class TeacherPostgresRepository(_BaseRepository):
             session.merge(record)
             return self._to_entity(record)
 
+    def _sync_student_links(self, session: Session, teacher_id: str, student_ids: List[str]) -> None:
+        """
+        Sincroniza a tabela teacher_student_links para o professor:
+        apaga vínculos antigos e insere os novos.
+        Ignora student_ids que não existam na tabela students (evita FK violation).
+        """
+        session.execute(
+            delete(TeacherStudentLinkRecord).where(
+                TeacherStudentLinkRecord.teacher_id == teacher_id
+            )
+        )
+        now = now_brasilia_iso()
+        seen = set()
+        for sid in student_ids:
+            sid = (sid or '').strip()
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            # Verifica se o student existe antes de inserir (evita FK violation)
+            exists = session.execute(
+                select(StudentRecord.id).where(StudentRecord.id == sid)
+            ).scalar_one_or_none()
+            if exists is None:
+                continue
+            session.add(TeacherStudentLinkRecord(
+                id=str(uuid.uuid4()),
+                teacher_id=teacher_id,
+                student_id=sid,
+                created_at=now,
+            ))
+
     def update_teacher(self, teacher_id: str, teacher_data: Dict) -> Optional[Dict]:
         with self._session() as session:
             record = session.get(TeacherRecord, teacher_id)
@@ -1274,6 +1362,9 @@ class TeacherPostgresRepository(_BaseRepository):
             data = dict(teacher_data)
             for k in ('id', 'created_at', 'updated_at', 'anonymized_data'):
                 data.pop(k, None)
+
+            # Extrai student_ids antes de processar os demais campos
+            raw_student_ids = data.pop('student_ids', None)
 
             if 'school_id' in data:
                 record.school_id = data.pop('school_id') or None
@@ -1289,7 +1380,13 @@ class TeacherPostgresRepository(_BaseRepository):
                 'school_id': record.school_id or '',
                 'specialization': record.specialization or '',
             }
+
             record.updated_at = now_brasilia_iso()
+
+            if raw_student_ids is not None:
+                self._sync_student_links(session, teacher_id, [str(s) for s in raw_student_ids if s])
+
+            session.flush()
             return self._to_entity(record)
 
     def get_teacher(self, teacher_id: str) -> Optional[Dict]:

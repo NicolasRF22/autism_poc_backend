@@ -2326,6 +2326,84 @@ def update_evaluator_scope(user_id):
         return jsonify({'error': str(err)}), 400
 
 
+@app.route('/api/auth/users/<user_id>', methods=['PUT'])
+def update_user_profile(user_id):
+    """Atualiza cadastro de usuário genérico (admin)."""
+    if _current_role() not in ADMIN_ROLES:
+        return jsonify({'error': 'Apenas admin pode atualizar usuários'}), 403
+
+    data = request.json or {}
+
+    role = data.get('role')
+    if role is not None:
+        role = str(role).strip().lower()
+        if role not in VALID_ROLES:
+            return jsonify({'error': 'Perfil inválido'}), 400
+
+    municipio_id = data.get('municipio_id')
+    if municipio_id is not None:
+        municipio_id = _normalize_municipio_id(municipio_id)
+        if municipio_id and not _get_municipality_record(municipio_id):
+            return jsonify({'error': 'Município inválido'}), 400
+
+    school_id = data.get('school_id')
+    if school_id is not None:
+        school_id = str(school_id).strip()
+        if school_id:
+            school = _get_school_record(school_id)
+            if not school:
+                return jsonify({'error': 'Escola selecionada não foi encontrada'}), 400
+
+            school_municipio_id = _normalize_municipio_id(_school_municipio_id(school))
+            target_municipio = municipio_id
+            if target_municipio is None:
+                existing_user = _auth_storage.get_user_by_id(user_id)
+                target_municipio = existing_user.get('municipio_id') if existing_user else None
+
+            target_municipio = _normalize_municipio_id(target_municipio)
+            if target_municipio and school_municipio_id and target_municipio != school_municipio_id:
+                return jsonify({'error': 'A escola selecionada não pertence ao município informado'}), 400
+
+    evaluator_scope = data.get('evaluator_scope')
+    if evaluator_scope is not None:
+        evaluator_scope = _normalize_evaluator_scope(evaluator_scope)
+        scope_ok, scope_error = _evaluator_scope_valid_for_create(evaluator_scope)
+        if not scope_ok:
+            return jsonify({'error': scope_error}), 400
+
+        for municipio_item in evaluator_scope.get('municipio_ids') or []:
+            normalized_municipio = _normalize_municipio_id(municipio_item)
+            if not _get_municipality_record(normalized_municipio):
+                return jsonify({'error': f'Município inválido no escopo: {municipio_item}'}), 400
+
+        for school_item in evaluator_scope.get('school_ids') or []:
+            if not _get_school_record(school_item):
+                return jsonify({'error': f'Escola inválida no escopo: {school_item}'}), 400
+
+        for student_item in evaluator_scope.get('student_ids') or []:
+            if not _get_student_record(student_item):
+                return jsonify({'error': f'Aluno inválido no escopo: {student_item}'}), 400
+
+    try:
+        user = _auth_storage.update_user(
+            user_id=user_id,
+            name=data.get('name'),
+            role=role,
+            municipio_id=municipio_id,
+            school_id=school_id,
+            teacher_id=data.get('teacher_id'),
+            evaluator_scope=evaluator_scope,
+            is_active=data.get('is_active'),
+        )
+        if not user:
+            return jsonify({'error': 'Usuário não encontrado'}), 404
+        return jsonify({'message': 'Usuário atualizado com sucesso', 'user': user})
+    except ValueError as err:
+        return jsonify({'error': str(err)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/auth/users/<user_id>', methods=['DELETE'])
 def delete_user(user_id):
     """Remove usuário existente (admin)."""

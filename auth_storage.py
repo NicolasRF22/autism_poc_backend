@@ -239,6 +239,51 @@ class AuthStorage:
         self._save_index()
         return self._sanitize_user(user)
 
+    def update_user(
+        self,
+        user_id: str,
+        name: Optional[str] = None,
+        role: Optional[str] = None,
+        municipio_id: Optional[str] = None,
+        school_id: Optional[str] = None,
+        teacher_id: Optional[str] = None,
+        evaluator_scope: Optional[dict] = None,
+        is_active: Optional[bool] = None,
+    ) -> Optional[Dict]:
+        user = self._get_raw_user_by_id(user_id)
+        if not user:
+            return None
+
+        if role is not None:
+            role = (role or "").strip().lower()
+            if role not in VALID_ROLES:
+                raise ValueError("Perfil inválido")
+            user["role"] = role
+
+        if name is not None:
+            user["name"] = (name or "").strip()
+
+        if municipio_id is not None:
+            user["municipio_id"] = (municipio_id or "").strip()
+
+        if school_id is not None:
+            user["school_id"] = (school_id or "").strip()
+
+        if teacher_id is not None:
+            user["teacher_id"] = (teacher_id or "").strip()
+
+        if evaluator_scope is not None:
+            user["evaluator_scope"] = self._normalize_evaluator_scope(evaluator_scope)
+
+        if is_active is not None:
+            user["is_active"] = bool(is_active)
+
+        self._validate_scope(user["role"], user.get("municipio_id") or "", user.get("school_id") or "")
+
+        user["updated_at"] = now_brasilia_iso()
+        self._save_index()
+        return self._sanitize_user(user)
+
     def delete_user(self, user_id: str, acting_user_id: str = "") -> Optional[Dict]:
         user = self._get_raw_user_by_id(user_id)
         if not user:
