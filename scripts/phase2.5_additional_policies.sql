@@ -32,7 +32,7 @@ using (
     public.current_user_role() in ('coordenacao', 'professor', 'viewer')
     and (
       coalesce(id, '') in (
-        select distinct coalesce(payload ->> 'municipio_id', '')
+        select distinct coalesce(municipio_id, '')
         from public.schools s
         where s.id = coalesce(public.current_user_school_id(), '')
           and coalesce(public.current_user_school_id(), '') <> ''

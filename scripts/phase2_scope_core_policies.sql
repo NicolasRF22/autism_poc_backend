@@ -25,34 +25,26 @@ grant select on table public.school_registration_submissions to authenticated;
 
 grant insert, update, delete on table public.teacher_student_links to authenticated;
 
+-- Remove legacy function that referenced payload column (no longer used).
+drop function if exists public.school_municipio_id_from_payload(jsonb);
+
 create or replace function public.current_user_teacher_id()
 returns text
 language sql
 stable
-as $$
+as $body$
   select teacher_id
   from public.user_profiles
   where id::text = auth.uid()::text
     and is_active = true
   limit 1;
-$$;
-
-create or replace function public.school_municipio_id_from_payload(school_payload jsonb)
-returns text
-language sql
-immutable
-as $$
-  select coalesce(
-    nullif(trim(coalesce(school_payload ->> 'municipio_id', '')), ''),
-    nullif(trim(coalesce(school_payload #>> '{address,city}', '')), '')
-  );
-$$;
+$body$;
 
 create or replace function public.can_access_school_scope(target_school_id text, target_municipio_id text)
 returns boolean
 language sql
 stable
-as $$
+as $body$
   select (
     public.current_user_role() = 'admin'
     or (
@@ -85,29 +77,29 @@ as $$
       )
     )
   );
-$$;
+$body$;
 
 create or replace function public.can_access_school_record(target_school_id text)
 returns boolean
 language sql
 stable
-as $$
+as $body$
   select exists (
     select 1
     from public.schools s
     where s.id = target_school_id
       and public.can_access_school_scope(
         s.id,
-        public.school_municipio_id_from_payload(s.payload::jsonb)
+        coalesce(s.municipio_id, '')
       )
   );
-$$;
+$body$;
 
 create or replace function public.can_access_teacher_record(target_teacher_id text)
 returns boolean
 language sql
 stable
-as $$
+as $body$
   select exists (
     select 1
     from public.teachers t
@@ -121,17 +113,17 @@ as $$
         )
         or (
           public.current_user_role() in ('secretaria', 'coordenacao', 'viewer')
-          and public.can_access_school_record(coalesce(t.payload ->> 'school_id', ''))
+          and public.can_access_school_record(coalesce(t.school_id, ''))
         )
       )
   );
-$$;
+$body$;
 
 create or replace function public.can_access_student_record(target_student_id text)
 returns boolean
 language sql
 stable
-as $$
+as $body$
   select exists (
     select 1
     from public.students st
@@ -140,19 +132,20 @@ as $$
         public.current_user_role() = 'admin'
         or (
           public.current_user_role() in ('secretaria', 'coordenacao', 'viewer')
-          and public.can_access_school_record(coalesce(st.payload ->> 'school_id', ''))
+          and public.can_access_school_record(coalesce(st.school_id, ''))
         )
         or (
           public.current_user_role() = 'professor'
           and coalesce(public.current_user_teacher_id(), '') <> ''
-          and (
-            coalesce(st.payload ->> 'teacher_id', '') = public.current_user_teacher_id()
-            or (st.payload::jsonb -> 'teacher_ids' ? public.current_user_teacher_id())
+          and exists (
+            select 1 from public.teacher_student_links tsl
+            where tsl.student_id = st.id
+              and tsl.teacher_id = public.current_user_teacher_id()
           )
         )
       )
   );
-$$;
+$body$;
 
 -- Recreate policies idempotently.
 drop policy if exists schools_select_policy on public.schools;
@@ -174,7 +167,7 @@ to authenticated
 using (
   public.can_access_school_scope(
     id,
-    public.school_municipio_id_from_payload(payload::jsonb)
+    coalesce(municipio_id, '')
   )
 );
 
@@ -199,7 +192,7 @@ on public.diary_entries
 for select
 to authenticated
 using (
-  public.can_access_student_record(coalesce(payload ->> 'student_id', ''))
+  public.can_access_student_record(coalesce(student_id, ''))
 );
 
 create policy pdis_select_policy
@@ -207,7 +200,7 @@ on public.pdis
 for select
 to authenticated
 using (
-  public.can_access_student_record(coalesce(payload ->> 'student_id', ''))
+  public.can_access_student_record(coalesce(student_id, ''))
 );
 
 create policy case_study_submissions_select_policy

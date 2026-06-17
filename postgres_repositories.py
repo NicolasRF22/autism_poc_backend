@@ -3033,7 +3033,20 @@ def _run_migration(engine) -> None:
         """,
     ]
 
+    # ── FASE 6b — torna payload nullable para que INSERTs funcionem mesmo
+    #             que o DROP COLUMN ainda não tenha sido executado ──────────
+    make_payload_nullable_stmts = [
+        "ALTER TABLE public.schools ALTER COLUMN payload DROP NOT NULL",
+        "ALTER TABLE public.teachers ALTER COLUMN payload DROP NOT NULL",
+        "ALTER TABLE public.students ALTER COLUMN payload DROP NOT NULL",
+        "ALTER TABLE public.diary_entries ALTER COLUMN payload DROP NOT NULL",
+        "ALTER TABLE public.pdis ALTER COLUMN payload DROP NOT NULL",
+    ]
+
     # ── FASE 7 — remove colunas payload (após backfill concluído) ─────────
+    # Requer que as funções/policies RLS não referenciem mais payload.
+    # Rodar scripts/phase2_scope_core_policies.sql e
+    # scripts/phase2.5_additional_policies.sql no Supabase antes de reiniciar.
     drop_payload_stmts = [
         "ALTER TABLE public.schools DROP COLUMN IF EXISTS payload",
         "ALTER TABLE public.teachers DROP COLUMN IF EXISTS payload",
@@ -3106,9 +3119,10 @@ def _run_migration(engine) -> None:
     run_batch(schema_stmts,         "schema")
     run_batch(backfill_stmts,       "backfill")
     run_batch(cleanup_stmts,        "json-cleanup")
-    run_batch(normalize_schema_stmts, "normalize-schema")
-    run_batch(normalize_backfill_stmts, "normalize-backfill")
-    run_batch(drop_payload_stmts,   "drop-payload")
+    run_batch(normalize_schema_stmts,      "normalize-schema")
+    run_batch(normalize_backfill_stmts,    "normalize-backfill")
+    run_batch(make_payload_nullable_stmts, "payload-nullable")
+    run_batch(drop_payload_stmts,          "drop-payload")
     run_batch(orphan_cleanup_stmts, "orphan-cleanup")
     run_batch(constraint_stmts,     "constraints")
 
