@@ -3107,6 +3107,21 @@ def _run_migration(engine) -> None:
         "ALTER TABLE public.object_storage_files ADD CONSTRAINT fk_osf_school FOREIGN KEY (school_id) REFERENCES public.schools(id) ON DELETE SET NULL",
     ]
 
+    has_payload = False
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text(
+                "SELECT EXISTS ("
+                "   SELECT 1 FROM information_schema.columns "
+                "   WHERE table_schema='public' "
+                "     AND table_name='schools' "
+                "     AND column_name='payload'"
+                ")"
+            )).scalar()
+            has_payload = bool(res)
+    except Exception as exc:
+        print(f"[postgres_repositories] erro ao verificar coluna payload: {exc}")
+
     def run_batch(stmts, label: str) -> None:
         try:
             with engine.begin() as conn:
@@ -3117,12 +3132,14 @@ def _run_migration(engine) -> None:
 
     run_batch(index_stmts,          "indexes")
     run_batch(schema_stmts,         "schema")
-    run_batch(backfill_stmts,       "backfill")
-    run_batch(cleanup_stmts,        "json-cleanup")
+    if has_payload:
+        run_batch(backfill_stmts,       "backfill")
+        run_batch(cleanup_stmts,        "json-cleanup")
     run_batch(normalize_schema_stmts,      "normalize-schema")
-    run_batch(normalize_backfill_stmts,    "normalize-backfill")
-    run_batch(make_payload_nullable_stmts, "payload-nullable")
-    run_batch(drop_payload_stmts,          "drop-payload")
+    if has_payload:
+        run_batch(normalize_backfill_stmts,    "normalize-backfill")
+        run_batch(make_payload_nullable_stmts, "payload-nullable")
+        run_batch(drop_payload_stmts,          "drop-payload")
     run_batch(orphan_cleanup_stmts, "orphan-cleanup")
     run_batch(constraint_stmts,     "constraints")
 
