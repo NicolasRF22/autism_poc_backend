@@ -1,7 +1,7 @@
 -- Phase 2.5 additional policies for user_profiles, municipalities, and object_storage_files.
 -- Apply after phase2_scope_core_policies.sql.
 
-begin;
+rollback;
 
 -- user_profiles: Each user can only see their own profile, except admin sees all.
 drop policy if exists user_profiles_select_policy on public.user_profiles;
@@ -57,5 +57,3 @@ using (
   public.current_user_role() = 'admin'
   or public.can_access_student_record(reference_id)
 );
-
-commit;

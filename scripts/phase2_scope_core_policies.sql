@@ -1,7 +1,8 @@
 -- Phase 2 hardening for core entities with scoped RBAC policies.
 -- Apply after phase1_scope_chat_schema.sql.
 
-begin;
+-- Limpa qualquer transacao abortada de execucoes anteriores.
+rollback;
 
 -- Keep RLS active on all protected tables.
 alter table if exists public.schools enable row level security;
@@ -25,8 +26,21 @@ grant select on table public.school_registration_submissions to authenticated;
 
 grant insert, update, delete on table public.teacher_student_links to authenticated;
 
--- Remove legacy function that referenced payload column (no longer used).
-drop function if exists public.school_municipio_id_from_payload(jsonb);
+-- Drop policies first (some depend on school_municipio_id_from_payload).
+drop policy if exists schools_select_policy on public.schools;
+drop policy if exists students_select_policy on public.students;
+drop policy if exists teachers_select_policy on public.teachers;
+drop policy if exists diary_entries_select_policy on public.diary_entries;
+drop policy if exists pdis_select_policy on public.pdis;
+drop policy if exists case_study_submissions_select_policy on public.case_study_submissions;
+drop policy if exists school_registration_submissions_select_policy on public.school_registration_submissions;
+drop policy if exists teacher_student_links_select_policy on public.teacher_student_links;
+drop policy if exists teacher_student_links_insert_policy on public.teacher_student_links;
+drop policy if exists teacher_student_links_update_policy on public.teacher_student_links;
+drop policy if exists teacher_student_links_delete_policy on public.teacher_student_links;
+
+-- Remove legacy function e todas as policies que ainda dependem dela.
+drop function if exists public.school_municipio_id_from_payload(jsonb) cascade;
 
 create or replace function public.current_user_teacher_id()
 returns text
@@ -147,19 +161,7 @@ as $body$
   );
 $body$;
 
--- Recreate policies idempotently.
-drop policy if exists schools_select_policy on public.schools;
-drop policy if exists students_select_policy on public.students;
-drop policy if exists teachers_select_policy on public.teachers;
-drop policy if exists diary_entries_select_policy on public.diary_entries;
-drop policy if exists pdis_select_policy on public.pdis;
-drop policy if exists case_study_submissions_select_policy on public.case_study_submissions;
-drop policy if exists school_registration_submissions_select_policy on public.school_registration_submissions;
-drop policy if exists teacher_student_links_select_policy on public.teacher_student_links;
-drop policy if exists teacher_student_links_insert_policy on public.teacher_student_links;
-drop policy if exists teacher_student_links_update_policy on public.teacher_student_links;
-drop policy if exists teacher_student_links_delete_policy on public.teacher_student_links;
-
+-- Recreate policies.
 create policy schools_select_policy
 on public.schools
 for select
@@ -270,5 +272,3 @@ using (
   and public.can_access_student_record(student_id)
   and public.can_access_teacher_record(teacher_id)
 );
-
-commit;
