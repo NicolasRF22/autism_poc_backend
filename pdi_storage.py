@@ -66,7 +66,6 @@ class PDIStorage:
         self,
         student_name: str,
         birth_date: str,
-        guardians: List[str],
         diagnosis: str,
         class_name: str,
         teachers: List[str],
@@ -83,7 +82,6 @@ class PDIStorage:
             "student_name": student_name,
             "student_grade": student_grade or '',
             "birth_date": birth_date,
-            "guardians": guardians,
             "diagnosis": diagnosis,
             "class": class_name,
             "teachers": teachers,
@@ -100,7 +98,6 @@ class PDIStorage:
         pdi_id: str,
         student_name: str,
         birth_date: str,
-        guardians: List[str],
         diagnosis: str,
         class_name: str,
         teachers: List[str],
@@ -114,13 +111,12 @@ class PDIStorage:
             return None
 
         subject_ids = get_pdi_subject_ids_for_grade(student_grade or pdi.get('student_grade'))
-        
+
         # Atualiza os campos
         pdi["student_id"] = student_id
         pdi["student_name"] = student_name
         pdi["student_grade"] = student_grade or ''
         pdi["birth_date"] = birth_date
-        pdi["guardians"] = guardians
         pdi["diagnosis"] = diagnosis
         pdi["class"] = class_name
         pdi["teachers"] = teachers

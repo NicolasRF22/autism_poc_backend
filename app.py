@@ -2404,6 +2404,26 @@ def update_user_profile(user_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/auth/users/<user_id>/password', methods=['PUT'])
+def change_user_password(user_id):
+    """Altera a senha de um usuário (admin)."""
+    if _current_role() not in ADMIN_ROLES:
+        return _scope_forbidden('Somente admins podem alterar senhas')
+    data = request.json or {}
+    new_password = (data.get('password') or '').strip()
+    if not new_password:
+        return jsonify({'error': 'Nova senha é obrigatória'}), 400
+    try:
+        updated = _auth_storage.change_password(user_id, new_password)
+        if not updated:
+            return jsonify({'error': 'Usuário não encontrado'}), 404
+        return jsonify({'message': 'Senha alterada com sucesso'})
+    except ValueError as err:
+        return jsonify({'error': str(err)}), 400
+    except Exception as err:
+        return jsonify({'error': str(err)}), 500
+
+
 @app.route('/api/auth/users/<user_id>', methods=['DELETE'])
 def delete_user(user_id):
     """Remove usuário existente (admin)."""
@@ -2956,7 +2976,9 @@ def delete_diary_entry(entry_id):
         else:
             deleted = _diary_storage.delete_entry(entry_id)
 
-        return jsonify({"message": "Entrada removida com sucesso"}) if deleted else jsonify({"error": "Entrada não encontrada"}), 404
+        if deleted:
+            return jsonify({"message": "Entrada removida com sucesso"}), 200
+        return jsonify({"error": "Entrada não encontrada"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -3069,7 +3091,7 @@ def list_diary_images(entry_id):
             'mime_type': file_meta.get('mime_type'),
             'size_bytes': file_meta.get('size_bytes'),
             'created_at': file_meta.get('created_at'),
-            'view_url': f"/api/diary/images/{file_meta.get('reference_id')}",
+            'view_url': f"/diary/images/{file_meta.get('reference_id')}",
         })
 
     return jsonify(results)
@@ -3519,15 +3541,11 @@ def create_pdi():
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
     
-    required_fields = ['student_id', 'student_name', 'birth_date', 'guardians', 'trimesters']
+    required_fields = ['student_id', 'student_name', 'birth_date', 'trimesters']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
-    
-    # Validar que há pelo menos 1 guardian e 1 teacher
-    if not data['guardians'] or len(data['guardians']) == 0:
-        return jsonify({"error": "Pelo menos uma filiação é obrigatória"}), 400
-    
+
     try:
         _sync_legacy_pdi_links()
         student_id = (data.get('student_id') or '').strip()
@@ -3571,7 +3589,6 @@ def create_pdi():
             pdi = _postgres_repositories['pdi'].save_pdi(
                 student_name=student_name,
                 birth_date=data['birth_date'],
-                guardians=data['guardians'],
                 diagnosis=data.get('diagnosis', ''),
                 class_name=data.get('class', ''),
                 teachers=data.get('teachers', []),
@@ -3583,7 +3600,6 @@ def create_pdi():
             pdi = _pdi_storage.save_pdi(
                 student_name=student_name,
                 birth_date=data['birth_date'],
-                guardians=data['guardians'],
                 diagnosis=data.get('diagnosis', ''),
                 class_name=data.get('class', ''),
                 teachers=data.get('teachers', []),
@@ -3595,7 +3611,6 @@ def create_pdi():
                 _postgres_repositories['pdi'].save_pdi(
                     student_name=student_name,
                     birth_date=data['birth_date'],
-                    guardians=data['guardians'],
                     diagnosis=data.get('diagnosis', ''),
                     class_name=data.get('class', ''),
                     teachers=data.get('teachers', []),
@@ -3625,15 +3640,11 @@ def update_pdi(pdi_id):
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
     
-    required_fields = ['student_id', 'student_name', 'birth_date', 'guardians', 'trimesters']
+    required_fields = ['student_id', 'student_name', 'birth_date', 'trimesters']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
-    
-    # Validar que há pelo menos 1 guardian e 1 teacher
-    if not data['guardians'] or len(data['guardians']) == 0:
-        return jsonify({"error": "Pelo menos uma filiação é obrigatória"}), 400
-    
+
     try:
         _sync_legacy_pdi_links()
         existing_pdi = _read_with_optional_fallback('pdi', _pdi_storage, 'get_pdi', pdi_id)
@@ -3684,7 +3695,6 @@ def update_pdi(pdi_id):
                 pdi_id=pdi_id,
                 student_name=student_name,
                 birth_date=data['birth_date'],
-                guardians=data['guardians'],
                 diagnosis=data['diagnosis'],
                 class_name=data['class'],
                 teachers=data['teachers'],
@@ -3697,7 +3707,6 @@ def update_pdi(pdi_id):
                 pdi_id=pdi_id,
                 student_name=student_name,
                 birth_date=data['birth_date'],
-                guardians=data['guardians'],
                 diagnosis=data['diagnosis'],
                 class_name=data['class'],
                 teachers=data['teachers'],
@@ -3710,7 +3719,6 @@ def update_pdi(pdi_id):
                     pdi_id=pdi_id,
                     student_name=student_name,
                     birth_date=data['birth_date'],
-                    guardians=data['guardians'],
                     diagnosis=data['diagnosis'],
                     class_name=data['class'],
                     teachers=data['teachers'],
@@ -5063,6 +5071,95 @@ def reset_chat_prompt():
     try:
         restored = _prompt_storage.reset_chat_prompt_to_base()
         return jsonify(restored)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Catálogo de prompts (CRUD + ativar)
+# ---------------------------------------------------------------------------
+
+@app.route('/api/rag/prompts', methods=['GET'])
+def list_prompts():
+    """Lista prompts de um escopo (pei ou chat)."""
+    scope = (request.args.get('scope') or '').strip().lower()
+    if scope not in ('pei', 'chat'):
+        return jsonify({"error": "Parâmetro scope é obrigatório (pei ou chat)"}), 400
+    try:
+        prompts = _prompt_storage.list_prompts(scope)
+        return jsonify(prompts)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/prompts', methods=['POST'])
+def create_prompt():
+    """Cria um novo prompt no catálogo."""
+    if _current_role() not in ADMIN_ROLES:
+        return _scope_forbidden('Somente admins podem gerenciar prompts')
+    data = request.json or {}
+    scope = (data.get('scope') or '').strip().lower()
+    name = (data.get('name') or '').strip()
+    description = (data.get('description') or '').strip()
+    content = (data.get('content') or '').strip()
+    activate = bool(data.get('activate', False))
+    if scope not in ('pei', 'chat'):
+        return jsonify({"error": "scope deve ser pei ou chat"}), 400
+    if not content:
+        return jsonify({"error": "Conteúdo do prompt é obrigatório"}), 400
+    try:
+        prompt = _prompt_storage.create_prompt(scope, name, description, content, activate=activate)
+        return jsonify(prompt), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/prompts/<prompt_id>', methods=['PUT'])
+def update_prompt(prompt_id):
+    """Atualiza um prompt existente."""
+    if _current_role() not in ADMIN_ROLES:
+        return _scope_forbidden('Somente admins podem gerenciar prompts')
+    data = request.json or {}
+    try:
+        prompt = _prompt_storage.update_prompt(
+            prompt_id,
+            scope=data.get('scope'),
+            name=data.get('name'),
+            description=data.get('description'),
+            content=data.get('content'),
+            activate=data.get('activate'),
+        )
+        return jsonify(prompt)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/prompts/<prompt_id>', methods=['DELETE'])
+def delete_prompt(prompt_id):
+    """Remove um prompt do catálogo (não remove o prompt base)."""
+    if _current_role() not in ADMIN_ROLES:
+        return _scope_forbidden('Somente admins podem gerenciar prompts')
+    try:
+        deleted = _prompt_storage.delete_prompt(prompt_id)
+        return jsonify({"message": "Prompt removido", "prompt": deleted})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/prompts/<prompt_id>/activate', methods=['POST'])
+def activate_prompt(prompt_id):
+    """Ativa um prompt do catálogo."""
+    if _current_role() not in ADMIN_ROLES:
+        return _scope_forbidden('Somente admins podem gerenciar prompts')
+    try:
+        prompt = _prompt_storage.activate_prompt(prompt_id)
+        return jsonify(prompt)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

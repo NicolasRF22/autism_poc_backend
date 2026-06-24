@@ -184,3 +184,13 @@
 {"timestamp": "2026-06-01T21:32:16.716939-03:00", "model": "gemini-embedding-001", "operation": "rag_upload_document_embedding:retrieval_document", "input_tokens": 101, "output_tokens": 0, "total_tokens": 101}
 {"timestamp": "2026-06-01T21:33:56.727379-03:00", "model": "gemini-embedding-001", "operation": "pei_query_embedding:retrieval_query", "input_tokens": 9, "output_tokens": 0, "total_tokens": 9}
 {"timestamp": "2026-06-01T21:34:46.904286-03:00", "model": "gemini-2.5-flash", "operation": "pei_generation", "input_tokens": 9045, "output_tokens": 4747, "total_tokens": 17935, "duration_ms": 62021}
+{"timestamp": "2026-06-23T22:43:26.291170-03:00", "model": "gemini-embedding-001", "operation": "rag_upload_document_embedding:retrieval_document", "input_tokens": 303, "output_tokens": 0, "total_tokens": 303}
+{"timestamp": "2026-06-23T22:43:27.278966-03:00", "model": "gemini-embedding-001", "operation": "rag_upload_document_embedding:retrieval_document", "input_tokens": 560, "output_tokens": 0, "total_tokens": 560}
+{"timestamp": "2026-06-23T22:44:55.408010-03:00", "model": "gemini-embedding-001", "operation": "rag_chat_query_embedding:retrieval_query", "input_tokens": 9, "output_tokens": 0, "total_tokens": 9}
+{"timestamp": "2026-06-23T22:44:59.994450-03:00", "model": "gemini-2.5-flash", "operation": "rag_chat_generation", "input_tokens": 7555, "output_tokens": 216, "total_tokens": 8102}
+{"timestamp": "2026-06-23T22:45:37.133750-03:00", "model": "gemini-embedding-001", "operation": "rag_chat_query_embedding:retrieval_query", "input_tokens": 11, "output_tokens": 0, "total_tokens": 11}
+{"timestamp": "2026-06-23T22:45:39.709982-03:00", "model": "gemini-2.5-flash", "operation": "rag_chat_generation", "input_tokens": 15244, "output_tokens": 15, "total_tokens": 15379}
+{"timestamp": "2026-06-23T22:46:19.695639-03:00", "model": "gemini-embedding-001", "operation": "rag_chat_query_embedding:retrieval_query", "input_tokens": 1, "output_tokens": 0, "total_tokens": 1}
+{"timestamp": "2026-06-23T22:46:22.563726-03:00", "model": "gemini-2.5-flash", "operation": "rag_chat_generation", "input_tokens": 11096, "output_tokens": 69, "total_tokens": 11204}
+{"timestamp": "2026-06-23T23:09:34.170194-03:00", "model": "gemini-embedding-001", "operation": "pei_query_embedding:retrieval_query", "input_tokens": 9, "output_tokens": 0, "total_tokens": 9}
+{"timestamp": "2026-06-23T23:10:12.999834-03:00", "model": "gemini-2.5-flash", "operation": "pei_generation", "input_tokens": 10338, "output_tokens": 4243, "total_tokens": 17758, "duration_ms": 48378}

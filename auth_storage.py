@@ -284,6 +284,22 @@ class AuthStorage:
         self._save_index()
         return self._sanitize_user(user)
 
+    def change_password(self, user_id: str, new_password: str) -> Optional[Dict]:
+        user_id = str(user_id or '').strip()
+        new_password = (new_password or '').strip()
+        if not user_id:
+            return None
+        if not new_password:
+            raise ValueError('Nova senha é obrigatória')
+        if len(new_password) < 6:
+            raise ValueError('A senha deve ter pelo menos 6 caracteres')
+        user = self._get_raw_user_by_id(user_id)
+        if not user:
+            return None
+        user['password_hash'] = generate_password_hash(new_password)
+        self._save_index()
+        return self._sanitize_user(user)
+
     def delete_user(self, user_id: str, acting_user_id: str = "") -> Optional[Dict]:
         user = self._get_raw_user_by_id(user_id)
         if not user:

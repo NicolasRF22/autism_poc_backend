@@ -227,7 +227,6 @@ def main() -> int:
         upsert_one=lambda item: repositories["pdi"].save_pdi(
             student_name=str(item.get("student_name") or ""),
             birth_date=str(item.get("birth_date") or ""),
-            guardians=list(item.get("guardians") or []),
             diagnosis=str(item.get("diagnosis") or ""),
             class_name=str(item.get("class") or ""),
             teachers=list(item.get("teachers") or []),

@@ -93,6 +93,7 @@ class StudentRecord(Base):
     # Dados originais
     name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     age: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    birth_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     class_name: Mapped[Optional[str]] = mapped_column('class', Text, nullable=True)
     grade: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     school_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -692,6 +693,25 @@ class PostgresAuthRepository:
             session.flush()
             return self._sanitize_user(record)
 
+    def change_password(self, user_id: str, new_password: str) -> Optional[Dict]:
+        user_id = str(user_id or '').strip()
+        new_password = (new_password or '').strip()
+        if not user_id:
+            return None
+        if not new_password:
+            raise ValueError('Nova senha é obrigatória')
+        if len(new_password) < 6:
+            raise ValueError('A senha deve ter pelo menos 6 caracteres')
+        from werkzeug.security import generate_password_hash
+        with self._session() as session:
+            record = session.get(UserProfileRecord, user_id)
+            if not record:
+                return None
+            record.password_hash = generate_password_hash(new_password)
+            record.updated_at = now_brasilia_iso()
+            session.flush()
+            return self._sanitize_user(record)
+
     def delete_user(self, user_id: str, acting_user_id: str = '') -> Optional[Dict]:
         user_id = str(user_id or '').strip()
         acting_user_id = str(acting_user_id or '').strip()
@@ -940,6 +960,19 @@ class StudentPostgresRepository(_BaseRepository):
         return list(rows)
 
     @staticmethod
+    def _get_teacher_names_by_ids(session: Session, teacher_ids: List[str]) -> List[str]:
+        """Converte lista de teacher_ids em lista de teacher_names."""
+        if not teacher_ids:
+            return []
+        rows = session.execute(
+            select(TeacherRecord.id, TeacherRecord.name).where(
+                TeacherRecord.id.in_(teacher_ids)
+            )
+        ).all()
+        id_to_name = {row.id: (row.name or '') for row in rows}
+        return [id_to_name[tid] for tid in teacher_ids if tid in id_to_name]
+
+    @staticmethod
     def _sync_teacher_links(session: Session, student_id: str, teacher_ids: List[str]) -> None:
         """
         Sincroniza a tabela teacher_student_links para o aluno:
@@ -972,18 +1005,23 @@ class StudentPostgresRepository(_BaseRepository):
             ))
 
     @staticmethod
-    def _student_entity(record: StudentRecord, teacher_ids: List[str]) -> Dict:
+    def _student_entity(record: StudentRecord, teacher_ids: List[str], teacher_names: Optional[List[str]] = None) -> Dict:
+        names = teacher_names or []
         return {
             'id': record.id,
             'school_id': record.school_id or '',
             'name': record.name or '',
             'age': record.age or '',
+            'birth_date': record.birth_date or '',
             'class': record.class_name or '',
             'grade': record.grade or '',
             'school_name': record.school_name or '',
             'case_study_completed': bool(record.case_study_completed),
             'teacher_ids': teacher_ids,
             'teacher_id': teacher_ids[0] if teacher_ids else '',
+            'teachers': names,
+            'teacher_names': names,
+            'teacher_name': names[0] if names else '',
             'anonymized_data': dict(record.anonymized_data or {}),
             'created_at': record.created_at,
             'updated_at': record.updated_at,
@@ -1010,6 +1048,7 @@ class StudentPostgresRepository(_BaseRepository):
 
         name = data.pop('name', None) or data.pop('studentName', '') or ''
         age = data.pop('age', None) or data.pop('studentAge', '') or ''
+        birth_date = data.pop('birth_date', None) or data.pop('birthDate', '') or ''
         class_name = data.pop('class', None) or data.pop('className', '') or ''
         grade = data.pop('grade', None) or data.pop('schoolYear', '') or ''
         school_name = data.pop('school_name', None) or data.pop('schoolName', '') or ''
@@ -1033,6 +1072,7 @@ class StudentPostgresRepository(_BaseRepository):
                 school_id=school_id,
                 name=name,
                 age=age,
+                birth_date=birth_date or None,
                 class_name=class_name,
                 grade=grade,
                 school_name=school_name,
@@ -1044,7 +1084,8 @@ class StudentPostgresRepository(_BaseRepository):
             session.merge(record)
             session.flush()
             self._sync_teacher_links(session, student_id, teacher_ids)
-            return self._student_entity(record, teacher_ids)
+            teacher_names = self._get_teacher_names_by_ids(session, teacher_ids)
+            return self._student_entity(record, teacher_ids, teacher_names)
 
     def update_student(self, student_id: str, student_data: Dict) -> Optional[Dict]:
         with self._session() as session:
@@ -1069,6 +1110,10 @@ class StudentPostgresRepository(_BaseRepository):
                 record.age = data.pop('age')
             elif 'studentAge' in data:
                 record.age = data.pop('studentAge')
+            if 'birth_date' in data:
+                record.birth_date = data.pop('birth_date') or None
+            elif 'birthDate' in data:
+                record.birth_date = data.pop('birthDate') or None
             if 'class' in data:
                 record.class_name = data.pop('class')
             elif 'className' in data:
@@ -1100,7 +1145,8 @@ class StudentPostgresRepository(_BaseRepository):
             else:
                 teacher_ids = self._get_teacher_ids(session, student_id)
 
-            return self._student_entity(record, teacher_ids)
+            teacher_names = self._get_teacher_names_by_ids(session, teacher_ids)
+            return self._student_entity(record, teacher_ids, teacher_names)
 
     def get_student(self, student_id: str) -> Optional[Dict]:
         with self._session() as session:
@@ -1108,7 +1154,8 @@ class StudentPostgresRepository(_BaseRepository):
             if not record:
                 return None
             teacher_ids = self._get_teacher_ids(session, student_id)
-            return self._student_entity(record, teacher_ids)
+            teacher_names = self._get_teacher_names_by_ids(session, teacher_ids)
+            return self._student_entity(record, teacher_ids, teacher_names)
 
     def list_all_students(self) -> List[Dict]:
         with self._session() as session:
@@ -1122,6 +1169,14 @@ class StudentPostgresRepository(_BaseRepository):
                 )
             ).scalars().all()
 
+            all_teacher_ids = list({link.teacher_id for link in link_rows})
+            teacher_name_rows = session.execute(
+                select(TeacherRecord.id, TeacherRecord.name).where(
+                    TeacherRecord.id.in_(all_teacher_ids)
+                )
+            ).all() if all_teacher_ids else []
+            teacher_id_to_name = {r.id: (r.name or '') for r in teacher_name_rows}
+
         teacher_ids_map: Dict[str, List[str]] = {}
         for link in link_rows:
             teacher_ids_map.setdefault(link.student_id, []).append(link.teacher_id)
@@ -1129,7 +1184,8 @@ class StudentPostgresRepository(_BaseRepository):
         summaries = []
         for row in rows:
             teacher_ids = teacher_ids_map.get(row.id, [])
-            student = self._student_entity(row, teacher_ids)
+            t_names = [teacher_id_to_name[tid] for tid in teacher_ids if tid in teacher_id_to_name]
+            student = self._student_entity(row, teacher_ids, t_names)
             summaries.append({
                 'id': student['id'],
                 'name': student.get('name', student.get('studentName', '')),
@@ -1138,6 +1194,9 @@ class StudentPostgresRepository(_BaseRepository):
                 'school_name': student.get('school_name', student.get('schoolName', '')),
                 'teacher_ids': teacher_ids,
                 'teacher_id': teacher_ids[0] if teacher_ids else '',
+                'teachers': t_names,
+                'teacher_names': t_names,
+                'teacher_name': t_names[0] if t_names else '',
                 'class': student.get('class', student.get('className', '')),
                 'grade': student.get('grade', student.get('schoolYear', '')),
                 'case_study_completed': bool(student.get('case_study_completed', False)),
@@ -1193,6 +1252,14 @@ class StudentPostgresRepository(_BaseRepository):
                 )
             ).scalars().all()
 
+            all_teacher_ids_scope = list({link.teacher_id for link in link_rows})
+            teacher_name_rows_scope = session.execute(
+                select(TeacherRecord.id, TeacherRecord.name).where(
+                    TeacherRecord.id.in_(all_teacher_ids_scope)
+                )
+            ).all() if all_teacher_ids_scope else []
+            teacher_id_to_name_scope = {r.id: (r.name or '') for r in teacher_name_rows_scope}
+
         teacher_ids_map: Dict[str, List[str]] = {}
         for link in link_rows:
             teacher_ids_map.setdefault(link.student_id, []).append(link.teacher_id)
@@ -1200,7 +1267,8 @@ class StudentPostgresRepository(_BaseRepository):
         summaries = []
         for row in rows:
             t_ids = teacher_ids_map.get(row.id, [])
-            student = self._student_entity(row, t_ids)
+            t_names = [teacher_id_to_name_scope[tid] for tid in t_ids if tid in teacher_id_to_name_scope]
+            student = self._student_entity(row, t_ids, t_names)
             summaries.append({
                 'id': student['id'],
                 'name': student.get('name', student.get('studentName', '')),
@@ -1209,6 +1277,9 @@ class StudentPostgresRepository(_BaseRepository):
                 'school_name': student.get('school_name', student.get('schoolName', '')),
                 'teacher_ids': t_ids,
                 'teacher_id': t_ids[0] if t_ids else '',
+                'teachers': t_names,
+                'teacher_names': t_names,
+                'teacher_name': t_names[0] if t_names else '',
                 'class': student.get('class', student.get('className', '')),
                 'grade': student.get('grade', student.get('schoolYear', '')),
                 'case_study_completed': bool(student.get('case_study_completed', False)),
@@ -1232,6 +1303,14 @@ class StudentPostgresRepository(_BaseRepository):
                 )
             ).scalars().all()
 
+            all_teacher_ids_find = list({link.teacher_id for link in link_rows})
+            teacher_name_rows_find = session.execute(
+                select(TeacherRecord.id, TeacherRecord.name).where(
+                    TeacherRecord.id.in_(all_teacher_ids_find)
+                )
+            ).all() if all_teacher_ids_find else []
+            teacher_id_to_name_find = {r.id: (r.name or '') for r in teacher_name_rows_find}
+
         teacher_ids_map: Dict[str, List[str]] = {}
         for link in link_rows:
             teacher_ids_map.setdefault(link.student_id, []).append(link.teacher_id)
@@ -1240,7 +1319,8 @@ class StudentPostgresRepository(_BaseRepository):
         for row in rows:
             if self._normalize_name(row.name or '') == normalized_candidate:
                 teacher_ids = teacher_ids_map.get(row.id, [])
-                matches.append(self._student_entity(row, teacher_ids))
+                t_names = [teacher_id_to_name_find[tid] for tid in teacher_ids if tid in teacher_id_to_name_find]
+                matches.append(self._student_entity(row, teacher_ids, t_names))
 
         return matches
 
@@ -1880,7 +1960,6 @@ class PDIPostgresRepository(_BaseRepository):
 
     def _to_entity(self, record: PDIRecord) -> Dict:
         teacher_names = list(record.teacher_names or [])
-        guardian_names = list(record.guardian_names or [])
         return {
             'id': record.id,
             'student_id': record.student_id or '',
@@ -1889,8 +1968,6 @@ class PDIPostgresRepository(_BaseRepository):
             'class': record.class_name or '',
             'diagnosis': record.diagnosis or '',
             'birth_date': record.birth_date or '',
-            'guardians': guardian_names,
-            'guardian_names': guardian_names,
             'teachers': teacher_names,
             'teacher_names': teacher_names,
             'teacher_ids': list(record.teacher_ids or []),
@@ -1920,7 +1997,6 @@ class PDIPostgresRepository(_BaseRepository):
         self,
         student_name: str,
         birth_date: str,
-        guardians: List[str],
         diagnosis: str,
         class_name: str,
         teachers: List[str],
@@ -1966,7 +2042,6 @@ class PDIPostgresRepository(_BaseRepository):
                 class_name=class_name,
                 diagnosis=diagnosis,
                 birth_date=birth_date,
-                guardian_names=list(guardians or []),
                 teacher_names=list(teachers or []),
                 teacher_ids=teacher_ids,
                 trimesters=normalized_trimesters,
@@ -1982,7 +2057,6 @@ class PDIPostgresRepository(_BaseRepository):
         pdi_id: str,
         student_name: str,
         birth_date: str,
-        guardians: List[str],
         diagnosis: str,
         class_name: str,
         teachers: List[str],
@@ -2017,7 +2091,6 @@ class PDIPostgresRepository(_BaseRepository):
             record.class_name = class_name
             record.diagnosis = diagnosis
             record.birth_date = birth_date
-            record.guardian_names = list(guardians or [])
             record.teacher_names = list(teachers or [])
             record.teacher_ids = teacher_ids
             record.trimesters = normalized_trimesters
@@ -2874,6 +2947,7 @@ def _run_migration(engine) -> None:
         # students
         "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS name TEXT",
         "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS age TEXT",
+        "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS birth_date VARCHAR(20)",
         'ALTER TABLE public.students ADD COLUMN IF NOT EXISTS "class" TEXT',
         "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS grade TEXT",
         "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS school_name TEXT",
