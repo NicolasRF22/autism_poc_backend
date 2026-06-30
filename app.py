@@ -776,6 +776,154 @@ def _build_integrated_student_context(
     return '\n\n---\n\n'.join(sections)
 
 
+def _collect_deanonymization_map(
+    student_record: Optional[Dict] = None,
+    school_record: Optional[Dict] = None,
+    linked_teacher_records: Optional[List[Dict]] = None,
+) -> Dict[str, str]:
+    """Monta mapeamento UUID → nome real para de-anonimização da resposta da IA."""
+    name_map: Dict[str, str] = {}
+    if student_record:
+        sid = (student_record.get('id') or '').strip()
+        sname = (student_record.get('name') or '').strip()
+        if sid and sname:
+            name_map[sid] = sname
+    if school_record:
+        scid = (school_record.get('id') or '').strip()
+        scname = (school_record.get('name') or '').strip()
+        if scid and scname:
+            name_map[scid] = scname
+    for teacher in (linked_teacher_records or []):
+        tid = (teacher.get('id') or '').strip()
+        tname = (teacher.get('name') or '').strip()
+        if tid and tname:
+            name_map[tid] = tname
+    return name_map
+
+
+def _deanonymize_text(text: str, name_map: Dict[str, str]) -> str:
+    """Substitui UUIDs presentes no texto da IA pelos nomes reais correspondentes."""
+    for uuid, real_name in name_map.items():
+        text = text.replace(uuid, real_name)
+    return text
+
+
+def _build_anonymized_student_context(
+    student_name: str,
+    student_id: str = '',
+    max_diary_entries: int = 8,
+    selected_sources: Dict[str, bool] | None = None,
+    engine=None,
+) -> str:
+    """Constrói contexto integrado usando apenas dados anonimizados (sem nomes reais) para envio à IA."""
+    source_selection = _parse_selected_sources(selected_sources)
+    sections: List[str] = []
+
+    student_record = _get_student_record(student_id) if student_id else None
+    if not student_record and student_name:
+        matches = _find_students_by_name(student_name)
+        student_record = matches[0] if matches else None
+
+    canonical_student_name = student_name
+    school_record = None
+    linked_teacher_records: List[Dict] = []
+
+    if student_record:
+        canonical_student_name = _student_name_from_record(student_record) or student_name
+        school_id = (student_record.get('school_id') or '').strip()
+        if school_id:
+            school_record = _get_school_record(school_id)
+
+        teacher_ids = student_record.get('teacher_ids') or []
+        if not isinstance(teacher_ids, list):
+            teacher_ids = []
+        legacy_teacher_id = (student_record.get('teacher_id') or '').strip()
+        if legacy_teacher_id and legacy_teacher_id not in teacher_ids:
+            teacher_ids.append(legacy_teacher_id)
+
+        for teacher_id in teacher_ids:
+            teacher = _get_teacher_record(teacher_id)
+            if teacher:
+                linked_teacher_records.append(teacher)
+
+    if source_selection.get('student_pre_registration') and student_record:
+        anon = dict(student_record.get('anonymized_data') or {})
+        sections.append(
+            'Dados anonimizados do aluno (JSON):\n'
+            + json.dumps(anon, ensure_ascii=False, indent=2)
+        )
+
+    if source_selection.get('school_pre_registration') and school_record:
+        anon = dict(school_record.get('anonymized_data') or {})
+        sections.append(
+            'Dados anonimizados da escola (JSON):\n'
+            + json.dumps(anon, ensure_ascii=False, indent=2)
+        )
+
+    if source_selection.get('teachers_pre_registration') and linked_teacher_records:
+        anon_list = [dict(t.get('anonymized_data') or {}) for t in linked_teacher_records]
+        sections.append(
+            'Dados anonimizados dos docentes vinculados (JSON):\n'
+            + json.dumps(anon_list, ensure_ascii=False, indent=2)
+        )
+
+    diary_entries = _get_diary_entries_for_student(canonical_student_name, student_id=student_id)
+    diary_entries_count = len(diary_entries)
+    if source_selection.get('diary') and diary_entries:
+        recent_entries = diary_entries[:max_diary_entries]
+        anon_entries = [dict(e.get('anonymized_data') or {}) for e in recent_entries]
+        sections.append(
+            'Diário de acompanhamento anonimizado (JSON, entradas mais recentes):\n'
+            + json.dumps(anon_entries, ensure_ascii=False, indent=2)
+        )
+
+    pdi = _get_pdi_for_student(canonical_student_name, student_id=student_id)
+
+    if source_selection.get('pdi') and pdi:
+        anon = dict(pdi.get('anonymized_data') or {})
+        sections.append(
+            'PDI anonimizado do aluno (JSON):\n'
+            + json.dumps(anon, ensure_ascii=False, indent=2)
+        )
+
+    linked_peis = _list_linked_peis(canonical_student_name, student_id=student_id)
+    if source_selection.get('linked_peis') and linked_peis:
+        pei_summaries = []
+        for entry in linked_peis:
+            pei_full = _pei_storage.get(entry.get('id')) or entry
+            anon_data = dict(pei_full.get('anonymized_data') or {})
+            # Excerpt omitido: PEIs anteriores foram gerados com nomes reais e
+            # incluir o texto vazaria dados sensíveis para a IA.
+            pei_summaries.append({
+                'id': pei_full.get('id'),
+                'created_at': pei_full.get('created_at'),
+                'student_id': anon_data.get('student_id', ''),
+                'school_id': anon_data.get('school_id', ''),
+            })
+        sections.append(
+            'PEIs anteriores anonimizados (JSON):\n'
+            + json.dumps(pei_summaries, ensure_ascii=False, indent=2)
+        )
+
+    source_status = (
+        'Status oficial das fontes (use estas flags para responder perguntas de existência de dados):\n'
+        f'- diario_entries_count: {diary_entries_count}\n'
+        f'- diario_included: {str(source_selection.get("diary") and diary_entries_count > 0).lower()}\n'
+        f'- pdi_included: {str(source_selection.get("pdi") and bool(pdi)).lower()}\n'
+        f'- student_pre_registration_included: {str(source_selection.get("student_pre_registration") and bool(student_record)).lower()}\n'
+        f'- teachers_pre_registration_included: {str(source_selection.get("teachers_pre_registration") and len(linked_teacher_records) > 0).lower()}\n'
+        f'- school_pre_registration_included: {str(source_selection.get("school_pre_registration") and bool(school_record)).lower()}\n'
+        f'- linked_peis_included: {str(source_selection.get("linked_peis") and len(linked_peis) > 0).lower()}\n'
+        'Regra: não classifique PDI como Diário. Se diario_entries_count = 0, responda que não há diário cadastrado.'
+    )
+    sections.insert(0, source_status)
+
+    if len(sections) == 1:
+        return '(Sem dados integrados selecionados para este aluno)'
+
+    return '\n\n---\n\n'.join(sections)
+
+
 @app.route('/api/rag/pei-sources-preview', methods=['GET'])
 def get_pei_sources_preview():
     """Retorna prévia das fontes que serão usadas para gerar PEI."""
@@ -875,7 +1023,7 @@ def get_pei_sources_preview():
             "pdi": {
                 "included": bool(pdi),
                 "updated_at": pdi.get('updated_at') if pdi else None,
-                "excerpt": _extract_entry_excerpt(pdi) if pdi else '',
+                "excerpt": pdi.get('student_grade') or '' if pdi else '',
             },
             "linked_peis": {
                 "included": len(linked_peis) > 0,
@@ -4624,6 +4772,7 @@ def rag_chat():
         school = data.get('school', '').strip()
         school_id = data.get('school_id', '').strip()
         new_session = bool(data.get('new_session'))
+        dry_run = bool(data.get('dry_run'))
 
         if student_id:
             student = _get_student_record(student_id)
@@ -4646,15 +4795,26 @@ def rag_chat():
         elif include_vector_documents and student_name:
             context_filter = {"student_name": {"$eq": student_name}}
 
+        # Contexto anonimizado para o chat
         integrated_context = ''
+        _chat_name_map: Dict[str, str] = {}
         if student_name:
-            integrated_context = _build_integrated_student_context(
+            integrated_context = _build_anonymized_student_context(
                 student_name=student_name,
                 student_id=student_id,
                 max_diary_entries=3,
                 selected_sources=selected_sources,
                 engine=engine,
             )
+            _chat_student = _get_student_record(student_id) if student_id else None
+            _chat_school_id = (_chat_student.get('school_id') or '').strip() if _chat_student else ''
+            _chat_school = _get_school_record(_chat_school_id) if _chat_school_id else None
+            _chat_teachers: List[Dict] = []
+            for _tid in ((_chat_student or {}).get('teacher_ids') or []):
+                _t = _get_teacher_record(_tid)
+                if _t:
+                    _chat_teachers.append(_t)
+            _chat_name_map = _collect_deanonymization_map(_chat_student, _chat_school, _chat_teachers)
 
         session_date = (data.get('session_date') or '').strip() or now_brasilia_iso()[:10]
         current_user = (getattr(g, 'current_user', None) or {})
@@ -4678,6 +4838,24 @@ def rag_chat():
                 else:
                     integrated_context = history_context
 
+        if dry_run:
+            from prompts import SYSTEM_PROMPT_CHAT
+            chat_system = chat_prompt_data['prompt'] or SYSTEM_PROMPT_CHAT
+            integrated_block = (
+                f"\nContexto integrado (cadastro/diário/PDI):\n{integrated_context}\n"
+                if integrated_context and integrated_context.strip() else ''
+            )
+            full_prompt_preview = f"[System prompt omitido por brevidade]\n{integrated_block}\nPergunta: {message}"
+            return jsonify({
+                "dry_run": True,
+                "anonymized_context": integrated_context,
+                "deanonymization_map": _chat_name_map,
+                "message": message,
+                "full_prompt_preview": full_prompt_preview,
+                "system_prompt_preview": chat_system[:300] + ('...' if len(chat_system) > 300 else ''),
+                "note": "Dry run ativado: a IA não foi chamada. 'full_prompt_preview' é o prompt exato que seria enviado ao Gemini.",
+            })
+
         result = engine.query(
             message=message,
             session_id=session_id,
@@ -4686,6 +4864,10 @@ def rag_chat():
             integrated_context=integrated_context,
             system_prompt_chat=chat_prompt_data['prompt'],
         )
+
+        # De-anonimiza a resposta do chat antes de salvar e exibir
+        if _chat_name_map and result.get('response'):
+            result['response'] = _deanonymize_text(result['response'], _chat_name_map)
 
         if chat_repo and current_user:
             scope = _resolve_chat_scope(
@@ -4892,7 +5074,7 @@ def generate_pei():
     school = data.get('school', '').strip()
     selected_sources = _parse_selected_sources(data.get('selected_sources'))
 
-    if not student_name or not school:
+    if not student_id and (not student_name or not school):
         return jsonify({"error": "Nome do estudante e escola são obrigatórios"}), 400
 
     if student_id:
@@ -4905,6 +5087,8 @@ def generate_pei():
         school = _student_school_from_record(student) or school
     elif not _student_name_visible_to_user(student_name):
         return _scope_forbidden()
+
+    dry_run = bool(data.get('dry_run'))
 
     try:
         pei_prompt_data = _prompt_storage.get_pei_prompt()
@@ -4923,26 +5107,78 @@ def generate_pei():
             if docs_summary.get('document_count', 0) == 0:
                 context_filter = {"student_name": {"$eq": student_name}}
 
-        integrated_context = _build_integrated_student_context(
+        # Contexto anonimizado (sem nomes reais) para envio à IA
+        integrated_context = _build_anonymized_student_context(
             student_name=student_name,
             student_id=student_id,
             selected_sources=selected_sources,
             engine=engine,
         )
+
+        # Monta mapa de de-anonimização (UUID → nome real)
+        _anon_student = _get_student_record(student_id) if student_id else None
+        _anon_school_id = (_anon_student.get('school_id') or '').strip() if _anon_student else ''
+        _anon_school = _get_school_record(_anon_school_id) if _anon_school_id else None
+        _anon_teachers: List[Dict] = []
+        for _tid in ((_anon_student or {}).get('teacher_ids') or []):
+            _t = _get_teacher_record(_tid)
+            if _t:
+                _anon_teachers.append(_t)
+        _name_map = _collect_deanonymization_map(_anon_student, _anon_school, _anon_teachers)
+
+        _school_id_for_prompt = _anon_school_id or ''
+
+        if dry_run:
+            from prompts import SYSTEM_PROMPT_PEI
+            display_student = student_id or student_name
+            display_school = _school_id_for_prompt or school
+            system_prompt = pei_prompt_data['prompt'] or SYSTEM_PROMPT_PEI
+            prompt_preview = (
+                f"{system_prompt.strip()}\n\n"
+                f"DADOS DO ESTUDANTE (ANONIMIZADOS):\n"
+                f"- ID do estudante: {display_student}\n"
+                f"- ID da escola: {display_school}\n"
+                f"- Informações adicionais: {data.get('additional_info') or 'Não informadas'}\n\n"
+                f"CONTEXTO INTEGRADO (CADASTRO/DIÁRIO/PDI):\n"
+                f"{integrated_context or '(Sem dados adicionais integrados para este aluno)'}\n\n"
+                f"Gere agora o PEI COMPLETO com as 10 seções obrigatórias."
+            )
+            return jsonify({
+                "dry_run": True,
+                "anonymized_context": integrated_context,
+                "deanonymization_map": _name_map,
+                "full_prompt_preview": prompt_preview,
+                "note": "Dry run ativado: a IA não foi chamada. 'full_prompt_preview' é o prompt exato que seria enviado ao Gemini.",
+            })
+
         result = engine.generate_pei(
             student_name=student_name,
             school=school,
+            student_id=student_id,
+            school_id=_school_id_for_prompt,
             additional_info=data.get('additional_info', ''),
             system_prompt_pei=pei_prompt_data['prompt'],
             context_filter=context_filter,
             include_vector_documents=include_vector_documents,
             integrated_context=integrated_context,
         )
-        markdown_text = result['pei']
+
+        # De-anonimiza a resposta antes de salvar e exibir
+        raw_pei = result['pei']
+        markdown_text = _deanonymize_text(raw_pei, _name_map)
+        app.logger.info(
+            '[ANONIMIZAÇÃO-PEI] Resposta de-anonimizada (primeiros 500 chars):\n%s',
+            markdown_text[:500],
+        )
 
         # Gerar PDF
         from pdf_generator import markdown_to_pdf
-        safe_name = student_name.replace(' ', '_')
+        safe_name = (
+            unicodedata.normalize('NFKD', student_name)
+            .encode('ascii', 'ignore')
+            .decode('ascii')
+            .replace(' ', '_')
+        )
         pdf_filename = f"PEI_{safe_name}_{now_brasilia_filename()}.pdf"
         temp_pdf_path = os.path.join(UPLOAD_FOLDER, pdf_filename)
         markdown_to_pdf(markdown_text, student_name, school, temp_pdf_path)
@@ -5005,6 +5241,52 @@ def generate_pei():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/debug/ai-context', methods=['GET'])
+def debug_ai_context():
+    """Retorna o contexto anonimizado que seria enviado à IA — sem chamar o modelo.
+
+    Use para validar que nenhum nome real está saindo em direção ao Gemini.
+    Parâmetros: student_id (obrigatório ou student_name).
+    """
+    student_id = request.args.get('student_id', '').strip()
+    student_name = request.args.get('student_name', '').strip()
+    if not student_id and not student_name:
+        return jsonify({"error": "Informe student_id ou student_name"}), 400
+
+    if student_id:
+        student = _get_student_record(student_id)
+        if not student:
+            return jsonify({"error": "Aluno não encontrado"}), 404
+        if not _student_visible_to_user(student):
+            return _scope_forbidden()
+        student_name = _student_name_from_record(student) or student_name
+
+    anonymized_ctx = _build_anonymized_student_context(
+        student_name=student_name,
+        student_id=student_id,
+    )
+
+    student_record = _get_student_record(student_id) if student_id else None
+    school_id = (student_record.get('school_id') or '').strip() if student_record else ''
+    school_record = _get_school_record(school_id) if school_id else None
+    teacher_records: List[Dict] = []
+    for _tid in ((student_record or {}).get('teacher_ids') or []):
+        _t = _get_teacher_record(_tid)
+        if _t:
+            teacher_records.append(_t)
+
+    name_map = _collect_deanonymization_map(student_record, school_record, teacher_records)
+
+    return jsonify({
+        "anonymized_context": anonymized_ctx,
+        "deanonymization_map": name_map,
+        "note": (
+            "Verifique que 'anonymized_context' não contém nomes reais. "
+            "'deanonymization_map' mostra os UUIDs que serão substituídos na resposta da IA."
+        ),
+    })
 
 
 @app.route('/api/rag/pei-prompt', methods=['GET'])

@@ -816,7 +816,6 @@ class SchoolPostgresRepository(_BaseRepository):
 
         anonymized_data = {
             'school_id': school_id,
-            'municipio_id': municipio_id or '',
             'institution_type': institution_type,
         }
 
@@ -864,7 +863,6 @@ class SchoolPostgresRepository(_BaseRepository):
 
             record.anonymized_data = {
                 'school_id': school_id,
-                'municipio_id': record.municipio_id or '',
                 'institution_type': record.institution_type or '',
             }
             record.updated_at = now_brasilia_iso()
@@ -3215,6 +3213,40 @@ def _run_migration(engine) -> None:
         run_batch(make_payload_nullable_stmts, "payload-nullable")
         run_batch(drop_payload_stmts,          "drop-payload")
     run_batch(orphan_cleanup_stmts, "orphan-cleanup")
+
+    # ── FASE 8 — backfill de anonimização ────────────────────────────────────
+    # Corrige registros criados antes da lógica de anonymized_data estar completa.
+    anonymization_backfill_stmts = [
+        # PDIs: preenche student_id e school_id (via JOIN com students) em anonymized_data
+        """
+        UPDATE public.pdis p
+        SET anonymized_data = (
+            jsonb_set(
+                jsonb_set(
+                    COALESCE(p.anonymized_data::jsonb, '{}'::jsonb),
+                    '{student_id}',
+                    to_jsonb(COALESCE(p.student_id, ''))
+                ),
+                '{school_id}',
+                to_jsonb(COALESCE(s.school_id, ''))
+            )
+        )::json
+        FROM public.students s
+        WHERE s.id = p.student_id
+          AND p.anonymized_data IS NOT NULL
+          AND (p.anonymized_data->>'student_id' = '' OR p.anonymized_data->>'student_id' IS NULL)
+          AND p.student_id IS NOT NULL
+        """,
+        # Escolas: remove municipio_id de anonymized_data (dado não deve ir para IA)
+        """
+        UPDATE public.schools
+        SET anonymized_data = (anonymized_data::jsonb - 'municipio_id')::json
+        WHERE anonymized_data IS NOT NULL
+          AND (anonymized_data::jsonb) ? 'municipio_id'
+        """,
+    ]
+    run_batch(anonymization_backfill_stmts, "anonymization-backfill")
+
     run_batch(constraint_stmts,     "constraints")
 
 

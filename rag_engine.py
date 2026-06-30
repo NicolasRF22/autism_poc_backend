@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from google import genai
@@ -7,6 +8,8 @@ from document_processor import generate_embeddings
 from prompts import SYSTEM_PROMPT_CHAT, SYSTEM_PROMPT_PEI
 from typing import Dict, List, Optional
 from usage_tracker import extract_usage_metrics, record_model_usage
+
+logger = logging.getLogger(__name__)
 
 # Stopwords básicas em português para extração de keywords
 _STOPWORDS = {
@@ -102,8 +105,19 @@ class RAGEngine:
             integrated_block = f"\nContexto integrado (cadastro/diário/PDI):\n{integrated_context}\n"
 
         full_prompt = f"{context_block}{integrated_block}\nPergunta: {message}"
+
+        logger.info(
+            '[ANONIMIZAÇÃO-CHAT] Prompt enviado ao Gemini (primeiros 2000 chars):\n%s',
+            full_prompt[:2000],
+        )
+
         response = chat.send_message(full_prompt)
         usage = extract_usage_metrics(response, fallback_text=full_prompt)
+
+        logger.info(
+            '[ANONIMIZAÇÃO-CHAT] Resposta bruta do Gemini (primeiros 500 chars):\n%s',
+            (response.text or '')[:500],
+        )
         record_model_usage(
             self.generation_model,
             input_tokens=usage['input_tokens'],
@@ -132,6 +146,8 @@ class RAGEngine:
         self,
         student_name: str,
         school: str,
+        student_id: str = "",
+        school_id: str = "",
         additional_info: str = "",
         system_prompt_pei: Optional[str] = None,
         context_filter: Optional[Dict] = None,
@@ -139,7 +155,7 @@ class RAGEngine:
         integrated_context: str = "",
     ) -> Dict:
         """Gera PEI completo estruturado a partir dos documentos indexados."""
-        # 1. Buscar documentos relacionados ao estudante
+        # 1. Buscar documentos — usa nomes reais para filtrar o ChromaDB
         docs = []
         if include_vector_documents:
             query_text = f"{student_name} {school} {additional_info}"
@@ -156,7 +172,7 @@ class RAGEngine:
                 filter_metadata=context_filter,
             )
 
-        # 2. Montar contexto
+        # 2. Montar contexto de documentos
         if not include_vector_documents:
             context = "(Fonte 'Documentos do RAG' desabilitada para esta geração.)"
         elif docs:
@@ -164,13 +180,15 @@ class RAGEngine:
         else:
             context = "(Nenhum documento encontrado. Gere o PEI com base nas informações fornecidas.)"
 
-        # 3. Prompt completo
+        # 3. Prompt anonimizado — usa IDs em vez de nomes reais
+        display_student = student_id or student_name
+        display_school = school_id or school
         pei_system_prompt = (system_prompt_pei or SYSTEM_PROMPT_PEI).strip()
         pei_prompt = f"""{pei_system_prompt}
 
-DADOS DO ESTUDANTE:
-- Nome: {student_name}
-- Escola: {school}
+DADOS DO ESTUDANTE (ANONIMIZADOS):
+- ID do estudante: {display_student}
+- ID da escola: {display_school}
 - Informações adicionais: {additional_info or 'Não informadas'}
 
 CONTEXTO DOS DOCUMENTOS INDEXADOS:
@@ -179,7 +197,13 @@ CONTEXTO DOS DOCUMENTOS INDEXADOS:
 CONTEXTO INTEGRADO (CADASTRO/DIÁRIO/PDI):
 {integrated_context or '(Sem dados adicionais integrados para este aluno)'}
 
-Gere agora o PEI COMPLETO com as 10 seções obrigatórias, personalizado para {student_name}."""
+Gere agora o PEI COMPLETO com as 10 seções obrigatórias."""
+
+        # Log do prompt para validação da anonimização
+        logger.info(
+            '[ANONIMIZAÇÃO-PEI] Prompt enviado ao Gemini (primeiros 2000 chars):\n%s',
+            pei_prompt[:2000],
+        )
 
         # 4. Chamar Gemini
         response = self.client.models.generate_content(
@@ -187,6 +211,11 @@ Gere agora o PEI COMPLETO com as 10 seções obrigatórias, personalizado para {
             contents=pei_prompt,
         )
         usage = extract_usage_metrics(response, fallback_text=pei_prompt)
+
+        logger.info(
+            '[ANONIMIZAÇÃO-PEI] Resposta bruta do Gemini (primeiros 500 chars):\n%s',
+            (response.text or '')[:500],
+        )
 
         return {
             "pei": response.text,
