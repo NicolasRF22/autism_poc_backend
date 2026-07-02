@@ -1,4 +1,5 @@
 import os
+import re
 import copy
 import unicodedata
 import difflib
@@ -806,6 +807,21 @@ def _deanonymize_text(text: str, name_map: Dict[str, str]) -> str:
     for uuid, real_name in name_map.items():
         text = text.replace(uuid, real_name)
     return text
+
+
+def _name_map_for_student(student_id: str) -> Dict[str, str]:
+    """Constrói mapa UUID→nome real para um aluno — reutilizável em qualquer endpoint."""
+    student = _get_student_record(student_id) if student_id else None
+    if not student:
+        return {}
+    school_id = (student.get('school_id') or '').strip()
+    school = _get_school_record(school_id) if school_id else None
+    teachers: List[Dict] = []
+    for tid in (student.get('teacher_ids') or []):
+        t = _get_teacher_record(tid)
+        if t:
+            teachers.append(t)
+    return _collect_deanonymization_map(student, school, teachers)
 
 
 def _build_anonymized_student_context(
@@ -2762,9 +2778,15 @@ def get_available_diary_students():
         return jsonify({"error": str(e)}), 500
 
 
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+
 @app.route('/api/diary/entries/<student_name>', methods=['GET'])
 def get_student_entries(student_name):
-    """Retorna todas as entradas de diário de um aluno específico"""
+    """Retorna todas as entradas de diário de um aluno específico.
+    Se o parâmetro for um UUID, delega para busca de entrada específica."""
+    if _UUID_RE.match(student_name):
+        return get_diary_entry(student_name)
+
     try:
         student_id = (request.args.get('student_id') or '').strip()
         if student_id:
@@ -2885,7 +2907,7 @@ def create_diary_entry():
             data['diary_date'],
         )
         if has_conflict:
-            warnings.append('Já existe registro para o mesmo aluno e data')
+            return jsonify({"error": "Já existe uma entrada para o dia selecionado"}), 409
 
         answers = data.get('answers', {})
         if attendance == 'presente':
@@ -2947,9 +2969,10 @@ def create_diary_entry():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/diary/entries/<entry_id>', methods=['GET'])
+@app.route('/api/diary/entries/<uuid:entry_id>', methods=['GET'])
 def get_diary_entry(entry_id):
     """Retorna uma entrada específica de diário"""
+    entry_id = str(entry_id)
     try:
         entry = _read_with_optional_fallback('diary', _diary_storage, 'get_entry', entry_id)
         if not entry:
@@ -2963,9 +2986,10 @@ def get_diary_entry(entry_id):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/diary/entries/<entry_id>', methods=['PUT'])
+@app.route('/api/diary/entries/<uuid:entry_id>', methods=['PUT'])
 def update_diary_entry(entry_id):
     """Atualiza uma entrada existente de diário"""
+    entry_id = str(entry_id)
     data = request.json or {}
     if not _can_edit_learning_records(_current_role()):
         return _scope_forbidden('Somente admin ou professor podem editar diário')
@@ -3096,9 +3120,10 @@ def update_diary_entry(entry_id):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/diary/entries/<entry_id>', methods=['DELETE'])
+@app.route('/api/diary/entries/<uuid:entry_id>', methods=['DELETE'])
 def delete_diary_entry(entry_id):
     """Remove uma entrada de diário"""
+    entry_id = str(entry_id)
     try:
         if not _can_edit_learning_records(_current_role()):
             return _scope_forbidden('Somente admin ou professor podem remover diário')
@@ -4865,9 +4890,12 @@ def rag_chat():
             system_prompt_chat=chat_prompt_data['prompt'],
         )
 
-        # De-anonimiza a resposta do chat antes de salvar e exibir
-        if _chat_name_map and result.get('response'):
-            result['response'] = _deanonymize_text(result['response'], _chat_name_map)
+        # Separa resposta bruta (UUIDs) da versão de-anonimizada (nomes reais).
+        # O histórico armazena a versão bruta — assim a IA nunca recebe nomes reais
+        # via histórico. O frontend recebe a versão de-anonimizada para exibição.
+        _raw_ai_response = (result.get('response') or '').strip()
+        if _chat_name_map and _raw_ai_response:
+            result['response'] = _deanonymize_text(_raw_ai_response, _chat_name_map)
 
         if chat_repo and current_user:
             scope = _resolve_chat_scope(
@@ -4908,7 +4936,7 @@ def rag_chat():
             chat_repo.append_message(
                 session_id=session_id,
                 role='assistant',
-                content=(result.get('response') or '').strip(),
+                content=_raw_ai_response,  # armazenado com UUIDs, não com nomes reais
                 user_id=(current_user.get('id') or '').strip(),
                 username='assistant',
                 sources={'documents': result.get('sources') or []},
@@ -4955,6 +4983,12 @@ def get_chat_session_messages(session_id):
         return jsonify({'error': 'Acesso negado para este histórico'}), 403
 
     messages = repo.list_messages(session_id)
+    _sid = (session_data.get('student_id') or '').strip()
+    if _sid:
+        _nmap = _name_map_for_student(_sid)
+        for msg in messages:
+            if msg.get('role') == 'assistant' and msg.get('content') and _nmap:
+                msg['content'] = _deanonymize_text(msg['content'], _nmap)
     return jsonify({'session': session_data, 'messages': messages, 'count': len(messages)})
 
 
@@ -4995,6 +5029,12 @@ def get_current_chat_session():
         return jsonify({'error': 'Acesso negado para este histórico'}), 403
 
     messages = repo.list_messages(session_id)
+    _sid = (session_data.get('student_id') or '').strip()
+    if _sid:
+        _nmap = _name_map_for_student(_sid)
+        for msg in messages:
+            if msg.get('role') == 'assistant' and msg.get('content') and _nmap:
+                msg['content'] = _deanonymize_text(msg['content'], _nmap)
     return jsonify({'session_id': session_id, 'session': session_data, 'messages': messages, 'count': len(messages)})
 
 

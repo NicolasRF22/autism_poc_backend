@@ -201,3 +201,5 @@
 {"timestamp": "2026-06-30T15:00:36.825780-03:00", "model": "gemini-2.5-flash", "operation": "rag_chat_generation", "input_tokens": 2044, "output_tokens": 52, "total_tokens": 2346}
 {"timestamp": "2026-06-30T15:02:41.028900-03:00", "model": "gemini-embedding-001", "operation": "rag_chat_query_embedding:retrieval_query", "input_tokens": 10, "output_tokens": 0, "total_tokens": 10}
 {"timestamp": "2026-06-30T15:02:42.654723-03:00", "model": "gemini-2.5-flash", "operation": "rag_chat_generation", "input_tokens": 3892, "output_tokens": 52, "total_tokens": 4071}
+{"timestamp": "2026-07-02T00:22:23.737275-03:00", "model": "gemini-embedding-001", "operation": "rag_chat_query_embedding:retrieval_query", "input_tokens": 19, "output_tokens": 0, "total_tokens": 19}
+{"timestamp": "2026-07-02T00:22:30.529989-03:00", "model": "gemini-2.5-flash", "operation": "rag_chat_generation", "input_tokens": 1636, "output_tokens": 296, "total_tokens": 2361}
