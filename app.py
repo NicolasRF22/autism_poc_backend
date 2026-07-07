@@ -7,6 +7,7 @@ import time
 import mimetypes
 import uuid
 from io import BytesIO
+from PIL import Image
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
@@ -18,6 +19,10 @@ import jwt
 from werkzeug.utils import secure_filename
 
 load_dotenv()
+
+_THUMB_CACHE: Dict[str, bytes] = {}
+_THUMB_MAX_DIMENSION = 300
+_THUMB_CACHE_LIMIT = 500
 
 
 def _to_bool(value: str, default: bool = False) -> bool:
@@ -2740,7 +2745,8 @@ def get_diary_students():
             if student_id:
                 student = _get_student_record(student_id)
                 if student and _student_visible_to_user(student):
-                    filtered.append(summary)
+                    enriched = {**summary, 'linked_teachers': student.get('teachers') or []}
+                    filtered.append(enriched)
                 continue
             if _student_name_visible_to_user(summary.get('student_name') or ''):
                 filtered.append(summary)
@@ -3265,6 +3271,7 @@ def list_diary_images(entry_id):
             'size_bytes': file_meta.get('size_bytes'),
             'created_at': file_meta.get('created_at'),
             'view_url': f"/diary/images/{file_meta.get('reference_id')}",
+            'thumb_url': f"/diary/images/{file_meta.get('reference_id')}/thumb",
         })
 
     return jsonify(results)
@@ -3295,6 +3302,42 @@ def get_diary_image(image_id):
         as_attachment=False,
         download_name=file_meta.get('original_filename') or f'{image_id}',
     )
+
+
+@app.route('/api/diary/images/<image_id>/thumb', methods=['GET'])
+def get_diary_image_thumb(image_id):
+    """Serve thumbnail redimensionado (max 300px) de imagem do diário."""
+    if image_id in _THUMB_CACHE:
+        return send_file(BytesIO(_THUMB_CACHE[image_id]), mimetype='image/jpeg', as_attachment=False)
+
+    file_meta = _get_object_metadata(DIARY_IMAGE_DOC_TYPE, image_id)
+    if not file_meta:
+        return jsonify({"error": "Imagem não encontrada"}), 404
+
+    extra = file_meta.get('extra') or {}
+    entry_id = extra.get('diary_entry_id') or ''
+    entry = _ensure_diary_entry_visible(entry_id)
+    if not entry:
+        return _scope_forbidden()
+
+    object_key = file_meta.get('object_key')
+    try:
+        file_bytes = _object_storage.download_file(DIARY_IMAGES_BUCKET, object_key)
+    except FileNotFoundError:
+        return jsonify({"error": "Imagem não disponível"}), 404
+
+    img = Image.open(BytesIO(file_bytes))
+    img.thumbnail((_THUMB_MAX_DIMENSION, _THUMB_MAX_DIMENSION), Image.LANCZOS)
+    if img.mode in ('RGBA', 'P', 'LA'):
+        img = img.convert('RGB')
+    buf = BytesIO()
+    img.save(buf, format='JPEG', quality=75, optimize=True)
+    thumb_bytes = buf.getvalue()
+
+    if len(_THUMB_CACHE) < _THUMB_CACHE_LIMIT:
+        _THUMB_CACHE[image_id] = thumb_bytes
+
+    return send_file(BytesIO(thumb_bytes), mimetype='image/jpeg', as_attachment=False)
 
 
 @app.route('/api/diary/images/<image_id>', methods=['DELETE'])
