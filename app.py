@@ -4695,6 +4695,7 @@ def upload_document():
         if not text:
             return jsonify({"error": "Não foi possível extrair texto do PDF"}), 400
 
+        _uploader = getattr(g, 'current_user', {}) or {}
         chunks = split_text_into_chunks(text)
         embeddings = [
             generate_embeddings(
@@ -4702,6 +4703,8 @@ def upload_document():
                 os.getenv('GOOGLE_API_KEY'),
                 task_type="RETRIEVAL_DOCUMENT",
                 operation='rag_upload_document_embedding',
+                user_id=_uploader.get('id'),
+                username=_uploader.get('username'),
             )
             for chunk in chunks
         ]
@@ -4854,6 +4857,7 @@ def reindex_documents():
         metadatas = all_data["metadatas"]
 
         google_api_key = os.getenv('GOOGLE_API_KEY')
+        _reindexer = getattr(g, 'current_user', {}) or {}
 
         # Re-gerar embeddings com task_type correto
         new_embeddings = []
@@ -4863,6 +4867,8 @@ def reindex_documents():
                 google_api_key,
                 task_type="RETRIEVAL_DOCUMENT",
                 operation='rag_reindex_document_embedding',
+                user_id=_reindexer.get('id'),
+                username=_reindexer.get('username'),
             )
             new_embeddings.append(emb)
 
@@ -4984,6 +4990,7 @@ def rag_chat():
                 "note": "Dry run ativado: a IA não foi chamada. 'full_prompt_preview' é o prompt exato que seria enviado ao Gemini.",
             })
 
+        _caller = getattr(g, 'current_user', {}) or {}
         result = engine.query(
             message=message,
             session_id=session_id,
@@ -4991,6 +4998,8 @@ def rag_chat():
             include_vector_documents=include_vector_documents,
             integrated_context=integrated_context,
             system_prompt_chat=chat_prompt_data['prompt'],
+            user_id=_caller.get('id'),
+            username=_caller.get('username'),
         )
 
         # Separa resposta bruta (UUIDs) da versão de-anonimizada (nomes reais).
@@ -5304,6 +5313,8 @@ def generate_pei():
             context_filter=context_filter,
             include_vector_documents=include_vector_documents,
             integrated_context=integrated_context,
+            user_id=_current_user_obj.get('id'),
+            username=_current_user_obj.get('username'),
         )
 
         # De-anonimiza a resposta antes de salvar e exibir
@@ -5375,6 +5386,8 @@ def generate_pei():
             total_tokens=usage.get('total_tokens'),
             operation='pei_generation',
             duration_ms=duration_ms,
+            user_id=_current_user_obj.get('id'),
+            username=_current_user_obj.get('username'),
         )
 
         result['pei_id'] = entry['id']

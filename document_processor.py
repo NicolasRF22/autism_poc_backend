@@ -69,6 +69,8 @@ def generate_embeddings(
     api_key: str,
     task_type: str = "RETRIEVAL_DOCUMENT",
     operation: str = "embedding",
+    user_id: str = None,
+    username: str = None,
 ) -> List[float]:
     """Gera embeddings usando Google Gemini (padrão: gemini-embedding-001).
 
@@ -85,12 +87,13 @@ def generate_embeddings(
         config=types.EmbedContentConfig(task_type=task_type),
     )
     usage = extract_usage_metrics(result, fallback_text=text)
-    operation_label = f"{operation}:{task_type.lower()}"
     record_model_usage(
         embedding_model,
         input_tokens=usage['input_tokens'],
         output_tokens=usage['output_tokens'],
         total_tokens=usage['total_tokens'],
-        operation=operation_label,
+        operation=operation,
+        user_id=user_id,
+        username=username,
     )
     return result.embeddings[0].values

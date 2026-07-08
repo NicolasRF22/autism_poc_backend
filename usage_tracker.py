@@ -9,6 +9,19 @@ from typing import Deque, Dict, Optional, Tuple
 from time_utils import now_brasilia
 
 
+# Preços dos modelos Gemini (USD por 1M tokens) — não usar variáveis de ambiente para isso.
+# Valores verificados em 07/2026: ai.google.dev/gemini-api/docs/pricing
+GEMINI_PRICE_TABLE: Dict[str, Dict[str, float]] = {
+    "gemini-2.5-flash": {
+        "input_per_1m": 0.30,
+        "output_per_1m": 2.50,
+    },
+    "gemini-embedding-001": {
+        "input_per_1m": 0.15,
+        "output_per_1m": 0.00,
+    },
+}
+
 Event = Tuple[datetime, int, int, int, str]
 
 _events_by_model: Dict[str, Deque[Event]] = defaultdict(deque)
@@ -107,6 +120,8 @@ def record_model_usage(
     total_tokens: Optional[int] = None,
     operation: str = 'unspecified',
     duration_ms: Optional[int] = None,
+    user_id: Optional[str] = None,
+    username: Optional[str] = None,
 ) -> None:
     if not model:
         return
@@ -134,6 +149,10 @@ def record_model_usage(
         }
         if duration_ms is not None:
             event['duration_ms'] = duration_ms
+        if user_id:
+            event['user_id'] = str(user_id)
+        if username:
+            event['username'] = str(username)
         with open(_usage_log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(event, ensure_ascii=False) + '\n')
 
@@ -317,6 +336,7 @@ def get_usage_snapshot(
     payload = {
         'generated_at': now.isoformat(),
         'models': models_payload,
+        'model_pricing': GEMINI_PRICE_TABLE,
         'global_operations_last_minute': global_operations_last_minute,
         'global_operations_last_day': global_operations_last_day,
         'notes': {

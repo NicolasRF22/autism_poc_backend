@@ -58,6 +58,8 @@ class RAGEngine:
         include_vector_documents: bool = True,
         integrated_context: str = "",
         system_prompt_chat: Optional[str] = None,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
     ) -> Dict:
         """Processa mensagem usando RAG: busca contexto e responde com Gemini."""
         similar_docs = []
@@ -67,6 +69,8 @@ class RAGEngine:
                 self.api_key,
                 task_type="RETRIEVAL_QUERY",
                 operation="rag_chat_query_embedding",
+                user_id=user_id,
+                username=username,
             )
             keywords = _extract_keywords(message)
             similar_docs = self.vector_store.hybrid_search(
@@ -124,6 +128,8 @@ class RAGEngine:
             output_tokens=usage['output_tokens'],
             total_tokens=usage['total_tokens'],
             operation='rag_chat_generation',
+            user_id=user_id,
+            username=username,
         )
 
         return {
@@ -153,6 +159,8 @@ class RAGEngine:
         context_filter: Optional[Dict] = None,
         include_vector_documents: bool = True,
         integrated_context: str = "",
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
     ) -> Dict:
         """Gera PEI completo estruturado a partir dos documentos indexados."""
         # 1. Buscar documentos — usa nomes reais para filtrar o ChromaDB
@@ -164,6 +172,8 @@ class RAGEngine:
                 self.api_key,
                 task_type="RETRIEVAL_QUERY",
                 operation="pei_query_embedding",
+                user_id=user_id,
+                username=username,
             )
             docs = self.vector_store.hybrid_search(
                 query_embedding,
