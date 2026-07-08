@@ -59,12 +59,14 @@ class PEIStorage:
 
     def list_all(self) -> List[Dict]:
         """Retorna todos os PEIs (sem o markdown para economizar payload)."""
+        self._index = self._load_index()
         return [
             {k: v for k, v in e.items() if k != "markdown"}
             for e in self._index
         ]
 
     def get(self, pei_id: str) -> Optional[Dict]:
+        self._index = self._load_index()
         return next((e for e in self._index if e["id"] == pei_id), None)
 
     def get_pdf_path(self, pei_id: str) -> Optional[str]:

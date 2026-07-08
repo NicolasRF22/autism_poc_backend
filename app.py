@@ -158,7 +158,8 @@ def _build_source_evidence_block(
         )
 
     if linked_peis:
-        pei_full = _pei_storage.get(linked_peis[0].get('id')) or linked_peis[0]
+        _pei_repo = _get_pei_repo()
+        pei_full = (_pei_repo.get(linked_peis[0].get('id')) if _pei_repo else _pei_storage.get(linked_peis[0].get('id'))) or linked_peis[0]
         pei_excerpt = _truncate_excerpt(pei_full.get('markdown') or '', max_length=300)
         lines.append(f'Evidencia - PEI vinculado ({len(linked_peis)}): {pei_excerpt}')
 
@@ -369,34 +370,17 @@ def _delete_object_metadata(doc_type: str, reference_id: str):
     return repository.delete_file(doc_type=doc_type, reference_id=reference_id)
 
 
-def _build_pei_entry_from_metadata(file_meta: Dict) -> Dict:
-    extra = file_meta.get('extra') or {}
-    return {
-        'id': file_meta.get('reference_id', ''),
-        'student_name': extra.get('student_name') or 'Aluno não identificado',
-        'school': extra.get('school') or '',
-        'created_at': file_meta.get('created_at') or '',
-        'pdf_filename': file_meta.get('original_filename') or f"{file_meta.get('reference_id', '')}.pdf",
-    }
+def _get_pei_repo():
+    if _is_postgres_available():
+        return _postgres_repositories.get('pei')
+    return None
 
 
-def _list_all_peis_with_metadata_fallback() -> List[Dict]:
-    local_entries = _pei_storage.list_all()
-    merged_by_id = {
-        str(item.get('id') or '').strip(): dict(item)
-        for item in local_entries
-        if str(item.get('id') or '').strip()
-    }
-
-    for file_meta in _list_object_metadata(PEI_DOC_TYPE, PEI_STORAGE_BUCKET):
-        reference_id = str(file_meta.get('reference_id') or '').strip()
-        if not reference_id or reference_id in merged_by_id:
-            continue
-        merged_by_id[reference_id] = _build_pei_entry_from_metadata(file_meta)
-
-    merged_entries = list(merged_by_id.values())
-    merged_entries.sort(key=lambda item: item.get('created_at') or '', reverse=True)
-    return merged_entries
+def _list_all_peis() -> List[Dict]:
+    repo = _get_pei_repo()
+    if repo:
+        return repo.list_all()
+    return _pei_storage.list_all()
 
 
 def _sync_legacy_diary_links() -> int:
@@ -649,7 +633,7 @@ def _entry_matches_student(entry: Dict, student_id: str, student_name: str, scho
 
 def _list_linked_peis(student_name: str, student_id: str = '', school: str = '', max_items: int = 10) -> List[Dict]:
     entries = []
-    for item in _list_all_peis_with_metadata_fallback():
+    for item in _list_all_peis():
         if not _entry_matches_student(item, student_id=student_id, student_name=student_name, school=school):
             continue
         entries.append(item)
@@ -736,8 +720,9 @@ def _build_integrated_student_context(
     linked_peis = _list_linked_peis(canonical_student_name, student_id=student_id)
     if source_selection.get('linked_peis') and linked_peis:
         pei_summaries = []
+        _pei_repo = _get_pei_repo()
         for entry in linked_peis:
-            pei_full = _pei_storage.get(entry.get('id')) or entry
+            pei_full = (_pei_repo.get(entry.get('id')) if _pei_repo else _pei_storage.get(entry.get('id'))) or entry
             markdown_text = pei_full.get('markdown') or ''
             pei_summaries.append({
                 'id': pei_full.get('id'),
@@ -910,8 +895,9 @@ def _build_anonymized_student_context(
     linked_peis = _list_linked_peis(canonical_student_name, student_id=student_id)
     if source_selection.get('linked_peis') and linked_peis:
         pei_summaries = []
+        _pei_repo = _get_pei_repo()
         for entry in linked_peis:
-            pei_full = _pei_storage.get(entry.get('id')) or entry
+            pei_full = (_pei_repo.get(entry.get('id')) if _pei_repo else _pei_storage.get(entry.get('id'))) or entry
             anon_data = dict(pei_full.get('anonymized_data') or {})
             # Excerpt omitido: PEIs anteriores foram gerados com nomes reais e
             # incluir o texto vazaria dados sensíveis para a IA.
@@ -1053,11 +1039,11 @@ def get_pei_sources_preview():
                     {
                         "id": item.get('id'),
                         "created_at": item.get('created_at'),
-                        "excerpt": _truncate_excerpt(((_pei_storage.get(item.get('id')) or item).get('markdown') or ''), max_length=600),
+                        "excerpt": _truncate_excerpt((((_get_pei_repo() or _pei_storage).get(item.get('id')) or item).get('markdown') or ''), max_length=600),
                     }
                     for item in linked_peis
                 ],
-                "excerpt": _truncate_excerpt(((_pei_storage.get(linked_peis[0].get('id')) or linked_peis[0]).get('markdown') or ''), max_length=600) if linked_peis else '',
+                "excerpt": _truncate_excerpt((((_get_pei_repo() or _pei_storage).get(linked_peis[0].get('id')) or linked_peis[0]).get('markdown') or ''), max_length=600) if linked_peis else '',
             },
         },
     })
@@ -1352,6 +1338,21 @@ def _current_user() -> Dict:
 
 def _current_role() -> str:
     return (_current_user().get('role') or '').strip().lower()
+
+
+def _current_actor() -> str:
+    u = _current_user()
+    return (u.get('username') or u.get('name') or u.get('id') or '').strip()
+
+
+def _resolve_professor_teacher_name() -> Optional[str]:
+    teacher_id = (_current_user().get('teacher_id') or '').strip()
+    if not teacher_id:
+        return None
+    teacher = _read_with_optional_fallback('teacher', _teacher_storage, 'get_teacher', teacher_id)
+    if not teacher:
+        return None
+    return (teacher.get('name') or teacher.get('teacher_name') or '').strip() or None
 
 
 def _is_global_user(user: Optional[Dict] = None) -> bool:
@@ -2828,12 +2829,13 @@ def delete_student_diary(student_name):
         elif not _student_name_visible_to_user(student_name):
             return _scope_forbidden()
 
+        actor = _current_user().get('username') or _current_user().get('name') or _current_user().get('id') or ''
         if _is_postgres_mode():
-            removed_count = _postgres_repositories['diary'].delete_entries_by_student(student_name, student_id=student_id)
+            removed_count = _postgres_repositories['diary'].delete_entries_by_student(student_name, student_id=student_id, deleted_by=actor)
         else:
             removed_count = _diary_storage.delete_entries_by_student(student_name, student_id=student_id)
             if _is_dual_mode():
-                _postgres_repositories['diary'].delete_entries_by_student(student_name, student_id=student_id)
+                _postgres_repositories['diary'].delete_entries_by_student(student_name, student_id=student_id, deleted_by=actor)
 
         if removed_count == 0:
             return jsonify({"error": "Diário não encontrado para este aluno"}), 404
@@ -2857,7 +2859,7 @@ def create_diary_entry():
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
     
-    required_fields = ['student_name', 'teachers', 'diary_date', 'answers', 'attendance']
+    required_fields = ['student_name', 'diary_date', 'answers', 'attendance']
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
@@ -2922,10 +2924,20 @@ def create_diary_entry():
         else:
             answers = {}
 
+        if _current_role() == 'professor':
+            teacher_name = _resolve_professor_teacher_name()
+            if not teacher_name:
+                return jsonify({"error": "Usuário professor não está vinculado a um docente cadastrado"}), 400
+            teachers = [teacher_name]
+        else:
+            teachers = data.get('teachers') or []
+            if not teachers:
+                return jsonify({"error": "Pelo menos um professor é obrigatório"}), 400
+
         if _is_postgres_mode():
             entry = _postgres_repositories['diary'].save_entry(
                 student_name=student_name,
-                teachers=data['teachers'],
+                teachers=teachers,
                 diary_date=data['diary_date'],
                 answers=answers,
                 open_obs=data.get('open_obs', ''),
@@ -2939,7 +2951,7 @@ def create_diary_entry():
         else:
             entry = _diary_storage.save_entry(
                 student_name=student_name,
-                teachers=data['teachers'],
+                teachers=teachers,
                 diary_date=data['diary_date'],
                 answers=answers,
                 open_obs=data.get('open_obs', ''),
@@ -2953,7 +2965,7 @@ def create_diary_entry():
             if _is_dual_mode():
                 _postgres_repositories['diary'].save_entry(
                     student_name=student_name,
-                    teachers=data['teachers'],
+                    teachers=teachers,
                     diary_date=data['diary_date'],
                     answers=answers,
                     open_obs=data.get('open_obs', ''),
@@ -3026,9 +3038,12 @@ def update_diary_entry(entry_id):
         else:
             student_name = data.get('student_name') or existing_entry.get('student_name') or ''
 
-        teachers = data.get('teachers', existing_entry.get('teachers', []))
-        if not isinstance(teachers, list) or len(teachers) == 0:
-            return jsonify({"error": "Pelo menos um professor é obrigatório"}), 400
+        if _current_role() == 'professor':
+            teachers = existing_entry.get('teachers') or []
+        else:
+            teachers = data.get('teachers', existing_entry.get('teachers', []))
+            if not isinstance(teachers, list) or len(teachers) == 0:
+                return jsonify({"error": "Pelo menos um professor é obrigatório"}), 400
 
         diary_date = (data.get('diary_date') or existing_entry.get('diary_date') or '').strip()
         if not diary_date:
@@ -3073,6 +3088,7 @@ def update_diary_entry(entry_id):
                 parse_warnings = [*parse_warnings, 'Já existe registro para o mesmo aluno e data']
                 break
 
+        actor = _current_actor()
         if _is_postgres_mode():
             updated_entry = _postgres_repositories['diary'].update_entry(
                 entry_id=entry_id,
@@ -3087,6 +3103,7 @@ def update_diary_entry(entry_id):
                 status=status,
                 source=source,
                 parse_warnings=parse_warnings,
+                last_edited_by=actor,
             )
         else:
             updated_entry = _diary_storage.update_entry(
@@ -3117,6 +3134,7 @@ def update_diary_entry(entry_id):
                     status=status,
                     source=source,
                     parse_warnings=parse_warnings,
+                    last_edited_by=actor,
                 )
         return jsonify({
             "message": "Entrada atualizada com sucesso",
@@ -3146,11 +3164,12 @@ def delete_diary_entry(entry_id):
         elif not _student_name_visible_to_user(entry.get('student_name') or ''):
             return _scope_forbidden()
 
+        actor = _current_user().get('username') or _current_user().get('name') or _current_user().get('id') or ''
         deleted = False
         if _is_postgres_mode():
-            deleted = _postgres_repositories['diary'].delete_entry(entry_id)
+            deleted = _postgres_repositories['diary'].delete_entry(entry_id, deleted_by=actor)
         elif _is_dual_mode():
-            deleted = _postgres_repositories['diary'].delete_entry(entry_id) or deleted
+            deleted = _postgres_repositories['diary'].delete_entry(entry_id, deleted_by=actor) or deleted
             deleted = _diary_storage.delete_entry(entry_id) or deleted
         else:
             deleted = _diary_storage.delete_entry(entry_id)
@@ -3193,8 +3212,11 @@ def upload_diary_images(entry_id):
     if not files:
         return jsonify({"error": "Nenhuma imagem enviada"}), 400
 
+    # captions sent as captions[0], captions[1], ... matching files order
+    captions_raw = request.form.getlist('captions')
+
     uploaded = []
-    for file in files:
+    for idx, file in enumerate(files):
         if not file or not file.filename:
             continue
 
@@ -3211,6 +3233,8 @@ def upload_diary_images(entry_id):
         extension = os.path.splitext(filename)[1]
         if not extension:
             extension = mimetypes.guess_extension(content_type) or ''
+
+        caption = (captions_raw[idx] if idx < len(captions_raw) else '').strip()
 
         object_key = f'diary/{entry_id}/{image_id}{extension}'
         _object_storage.upload_file(
@@ -3232,6 +3256,7 @@ def upload_diary_images(entry_id):
                 'diary_entry_id': entry_id,
                 'student_id': entry.get('student_id') or '',
                 'student_name': entry.get('student_name') or '',
+                'caption': caption,
             },
         )
 
@@ -3240,6 +3265,7 @@ def upload_diary_images(entry_id):
             'file_name': filename,
             'mime_type': content_type,
             'size_bytes': len(file_bytes),
+            'caption': caption,
         })
 
     if not uploaded:
@@ -3270,6 +3296,7 @@ def list_diary_images(entry_id):
             'mime_type': file_meta.get('mime_type'),
             'size_bytes': file_meta.get('size_bytes'),
             'created_at': file_meta.get('created_at'),
+            'caption': (extra.get('caption') or ''),
             'view_url': f"/diary/images/{file_meta.get('reference_id')}",
             'thumb_url': f"/diary/images/{file_meta.get('reference_id')}/thumb",
         })
@@ -3360,6 +3387,39 @@ def delete_diary_image(image_id):
     _object_storage.delete_file(DIARY_IMAGES_BUCKET, object_key)
     _delete_object_metadata(DIARY_IMAGE_DOC_TYPE, image_id)
     return jsonify({"message": "Imagem removida com sucesso"})
+
+
+@app.route('/api/diary/images/<image_id>/caption', methods=['PATCH'])
+def update_diary_image_caption(image_id):
+    """Atualiza a legenda de uma imagem do diário."""
+    if not _can_edit_learning_records(_current_role()):
+        return _scope_forbidden('Somente admin ou professor podem editar imagens')
+
+    file_meta = _get_object_metadata(DIARY_IMAGE_DOC_TYPE, image_id)
+    if not file_meta:
+        return jsonify({"error": "Imagem não encontrada"}), 404
+
+    extra = dict(file_meta.get('extra') or {})
+    entry_id = extra.get('diary_entry_id') or ''
+    entry = _ensure_diary_entry_visible(entry_id)
+    if not entry:
+        return _scope_forbidden()
+
+    body = request.get_json(silent=True) or {}
+    caption = str(body.get('caption') or '').strip()
+    extra['caption'] = caption
+
+    _upsert_object_metadata(
+        doc_type=DIARY_IMAGE_DOC_TYPE,
+        reference_id=image_id,
+        bucket=file_meta.get('bucket') or DIARY_IMAGES_BUCKET,
+        object_key=file_meta.get('object_key') or '',
+        original_filename=file_meta.get('original_filename') or image_id,
+        mime_type=file_meta.get('mime_type') or 'image/jpeg',
+        size_bytes=int(file_meta.get('size_bytes') or 0),
+        extra=extra,
+    )
+    return jsonify({"message": "Legenda atualizada", "caption": caption})
 
 
 @app.route('/api/diary/last-teachers/<student_name>', methods=['GET'])
@@ -5266,21 +5326,10 @@ def generate_pei():
         temp_pdf_path = os.path.join(UPLOAD_FOLDER, pdf_filename)
         markdown_to_pdf(markdown_text, student_name, school, temp_pdf_path)
 
-        # Salvar no índice
-        entry = _pei_storage.save(
-            student_name=student_name,
-            school=school,
-            markdown_text=markdown_text,
-            pdf_path=temp_pdf_path,
-            student_id=student_id or None,
-            generated_by_user_id=(getattr(g, 'current_user', {}) or {}).get('id'),
-            generated_by_username=(getattr(g, 'current_user', {}) or {}).get('username'),
-        )
-
         with open(temp_pdf_path, 'rb') as generated_pdf:
             pdf_bytes = generated_pdf.read()
 
-        pei_object_key = entry.get('pdf_filename') or f"{entry['id']}.pdf"
+        pei_object_key = pdf_filename
         _object_storage.upload_file(
             bucket=PEI_STORAGE_BUCKET,
             object_key=pei_object_key,
@@ -5288,22 +5337,34 @@ def generate_pei():
             content_type='application/pdf',
         )
 
-        _upsert_object_metadata(
-            doc_type=PEI_DOC_TYPE,
-            reference_id=entry['id'],
-            bucket=PEI_STORAGE_BUCKET,
-            object_key=pei_object_key,
-            original_filename=entry.get('pdf_filename') or pdf_filename,
-            mime_type='application/pdf',
-            size_bytes=len(pdf_bytes),
-            extra={
-                'student_name': student_name,
-                'school': school,
-            },
-        )
-
         if os.path.exists(temp_pdf_path):
             os.remove(temp_pdf_path)
+
+        _current_user_obj = getattr(g, 'current_user', {}) or {}
+        repo = _get_pei_repo()
+        if repo:
+            entry = repo.save(
+                student_name=student_name,
+                school=school,
+                markdown_text=markdown_text,
+                pdf_filename=pdf_filename,
+                object_key=pei_object_key,
+                bucket=PEI_STORAGE_BUCKET,
+                student_id=student_id or None,
+                generated_by_user_id=_current_user_obj.get('id'),
+                generated_by_username=_current_user_obj.get('username'),
+            )
+        else:
+            _tmp = os.path.join(UPLOAD_FOLDER, pdf_filename)
+            entry = _pei_storage.save(
+                student_name=student_name,
+                school=school,
+                markdown_text=markdown_text,
+                pdf_path=_tmp,
+                student_id=student_id or None,
+                generated_by_user_id=_current_user_obj.get('id'),
+                generated_by_username=_current_user_obj.get('username'),
+            )
 
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         usage = result.get('usage') or {}
@@ -5536,7 +5597,7 @@ def list_peis():
         student_id_filter = request.args.get('student_id', '').strip()
         student_filter = request.args.get('student_name', '').strip()
         school_filter = request.args.get('school', '').strip()
-        peis = _list_all_peis_with_metadata_fallback()
+        peis = _list_all_peis()
         peis = [pei for pei in peis if _pei_visible_to_user(pei)]
         if student_id_filter or student_filter or school_filter:
             peis = [
@@ -5556,19 +5617,20 @@ def list_peis():
 @app.route('/api/rag/peis/<pei_id>/pdf', methods=['GET'])
 def get_pei_pdf(pei_id):
     """Serve o arquivo PDF de um PEI"""
-    pei_entry = _pei_storage.get(pei_id)
-    file_meta = _get_object_metadata(PEI_DOC_TYPE, pei_id)
+    repo = _get_pei_repo()
+    pei_entry = repo.get(pei_id) if repo else _pei_storage.get(pei_id)
 
-    if not pei_entry and not file_meta:
+    if not pei_entry:
         return jsonify({"error": "PEI não encontrado"}), 404
 
-    if pei_entry and not _pei_visible_to_user(pei_entry):
+    if not _pei_visible_to_user(pei_entry):
         return _scope_forbidden()
 
-    object_key = file_meta.get('object_key') if file_meta else f'{pei_id}.pdf'
+    object_key = pei_entry.get('object_key') or f'{pei_id}.pdf'
+    bucket = pei_entry.get('bucket') or PEI_STORAGE_BUCKET
 
     try:
-        file_bytes = _object_storage.download_file(PEI_STORAGE_BUCKET, object_key)
+        file_bytes = _object_storage.download_file(bucket, object_key)
     except FileNotFoundError:
         return jsonify({"error": "Arquivo PDF do PEI não disponível"}), 404
 
@@ -5576,11 +5638,7 @@ def get_pei_pdf(pei_id):
         BytesIO(file_bytes),
         mimetype='application/pdf',
         as_attachment=False,
-        download_name=(
-            (pei_entry or {}).get('pdf_filename')
-            or (file_meta or {}).get('original_filename')
-            or f'{pei_id}.pdf'
-        ),
+        download_name=pei_entry.get('pdf_filename') or f'{pei_id}.pdf',
     )
 
 
@@ -5590,15 +5648,22 @@ def delete_pei(pei_id):
     if _current_role() not in ADMIN_ROLES:
         return _scope_forbidden()
 
-    file_meta = _get_object_metadata(PEI_DOC_TYPE, pei_id)
-    object_key = file_meta.get('object_key') if file_meta else f'{pei_id}.pdf'
-    _object_storage.delete_file(PEI_STORAGE_BUCKET, object_key)
-    _delete_object_metadata(PEI_DOC_TYPE, pei_id)
+    repo = _get_pei_repo()
+    pei_entry = repo.get(pei_id) if repo else _pei_storage.get(pei_id)
 
-    local_deleted = _pei_storage.delete(pei_id)
-    if local_deleted or file_meta:
-        return jsonify({"message": "PEI removido"})
-    return jsonify({"error": "PEI não encontrado"}), 404
+    if not pei_entry:
+        return jsonify({"error": "PEI não encontrado"}), 404
+
+    object_key = pei_entry.get('object_key') or f'{pei_id}.pdf'
+    bucket = pei_entry.get('bucket') or PEI_STORAGE_BUCKET
+    _object_storage.delete_file(bucket, object_key)
+
+    if repo:
+        repo.delete(pei_id)
+    else:
+        _pei_storage.delete(pei_id)
+
+    return jsonify({"message": "PEI removido"})
 
 
 if __name__ == '__main__':

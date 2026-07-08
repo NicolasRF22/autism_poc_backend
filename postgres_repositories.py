@@ -4,8 +4,8 @@ from contextlib import contextmanager
 from typing import Dict, List, Optional
 
 from sqlalchemy import (
-    JSON, ForeignKey, Integer, String, Text,
-    UniqueConstraint, create_engine, delete, select, text,
+    Boolean, JSON, ForeignKey, Integer, String, Text,
+    UniqueConstraint, create_engine, delete, select, text, update,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -157,6 +157,13 @@ class DiaryEntryRecord(Base):
     anonymized_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # Soft delete
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='false')
+    deleted_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    deleted_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Auditoria de edição
+    last_edited_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_edited_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
 
 
 class PDIRecord(Base):
@@ -269,6 +276,29 @@ class ObjectStorageFileRecord(Base):
     extra_json: Mapped[dict] = mapped_column('extra', JSON, nullable=False, default=dict)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class PEIRecord(Base):
+    """PEIs gerados por IA. FK: student_id → students (SET NULL)."""
+    __tablename__ = 'peis'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    student_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey('students.id', ondelete='SET NULL', name='fk_peis_student'),
+        nullable=True,
+        index=True,
+    )
+    student_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    school: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    generated_by_user_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    generated_by_username: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pdf_filename: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    object_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bucket: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    markdown: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    anonymized_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
 class ChatSessionRecord(Base):
@@ -866,6 +896,9 @@ class SchoolPostgresRepository(_BaseRepository):
                 'institution_type': record.institution_type or '',
             }
             record.updated_at = now_brasilia_iso()
+            if last_edited_by is not None:
+                record.last_edited_by = last_edited_by
+                record.last_edited_at = last_edited_at or now_brasilia_iso()
             return self._to_entity(record)
 
     def get_school(self, school_id: str) -> Optional[Dict]:
@@ -1636,6 +1669,11 @@ class DiaryPostgresRepository(_BaseRepository):
             'anonymized_data': dict(record.anonymized_data or {}),
             'created_at': record.created_at,
             'updated_at': record.updated_at or '',
+            'is_deleted': bool(record.is_deleted),
+            'deleted_at': record.deleted_at or '',
+            'deleted_by': record.deleted_by or '',
+            'last_edited_by': record.last_edited_by or '',
+            'last_edited_at': record.last_edited_at or '',
         }
 
     def _normalize_name(self, value: str) -> str:
@@ -1723,7 +1761,9 @@ class DiaryPostgresRepository(_BaseRepository):
 
     def list_all_entries(self) -> List[Dict]:
         with self._session() as session:
-            rows = session.execute(select(DiaryEntryRecord)).scalars().all()
+            rows = session.execute(
+                select(DiaryEntryRecord).where(DiaryEntryRecord.is_deleted == False)  # noqa: E712
+            ).scalars().all()
         return [self._to_entity(row) for row in rows]
 
     def get_entries_by_student(self, student_name: str, student_id: Optional[str] = None) -> List[Dict]:
@@ -1731,12 +1771,17 @@ class DiaryPostgresRepository(_BaseRepository):
             if student_id:
                 # Caminho rápido: usa o índice da coluna FK student_id
                 rows = session.execute(
-                    select(DiaryEntryRecord).where(DiaryEntryRecord.student_id == student_id)
+                    select(DiaryEntryRecord).where(
+                        DiaryEntryRecord.student_id == student_id,
+                        DiaryEntryRecord.is_deleted == False,  # noqa: E712
+                    )
                 ).scalars().all()
                 entries = [self._to_entity(row) for row in rows]
             else:
                 # Fallback por nome: full scan (student_id não disponível)
-                rows = session.execute(select(DiaryEntryRecord)).scalars().all()
+                rows = session.execute(
+                    select(DiaryEntryRecord).where(DiaryEntryRecord.is_deleted == False)  # noqa: E712
+                ).scalars().all()
                 entities = [self._to_entity(row) for row in rows]
                 entries = [e for e in entities
                            if self._entry_matches_student(e, None, student_name)]
@@ -1764,6 +1809,8 @@ class DiaryPostgresRepository(_BaseRepository):
         status: str = 'final',
         source: str = 'manual',
         parse_warnings: Optional[List[str]] = None,
+        last_edited_by: Optional[str] = None,
+        last_edited_at: Optional[str] = None,
     ) -> Optional[Dict]:
         with self._session() as session:
             record = session.get(DiaryEntryRecord, entry_id)
@@ -1808,24 +1855,37 @@ class DiaryPostgresRepository(_BaseRepository):
             record.updated_at = now_brasilia_iso()
             return self._to_entity(record)
 
-    def delete_entry(self, entry_id: str) -> bool:
-        return self._delete(entry_id)
+    def delete_entry(self, entry_id: str, deleted_by: Optional[str] = None) -> bool:
+        with self._session() as session:
+            record = session.get(DiaryEntryRecord, entry_id)
+            if not record:
+                return False
+            record.is_deleted = True
+            record.deleted_at = now_brasilia_iso()
+            record.deleted_by = deleted_by or ''
+            return True
 
-    def delete_entries_by_student(self, student_name: str, student_id: Optional[str] = None) -> int:
+    def delete_entries_by_student(self, student_name: str, student_id: Optional[str] = None, deleted_by: Optional[str] = None) -> int:
+        now = now_brasilia_iso()
         with self._session() as session:
             if student_id:
-                # Caminho rápido: usa índice FK
                 rows = session.execute(
-                    select(DiaryEntryRecord).where(DiaryEntryRecord.student_id == student_id)
+                    select(DiaryEntryRecord).where(
+                        DiaryEntryRecord.student_id == student_id,
+                        DiaryEntryRecord.is_deleted == False,  # noqa: E712
+                    )
                 ).scalars().all()
             else:
-                # Fallback por nome
-                all_rows = session.execute(select(DiaryEntryRecord)).scalars().all()
+                all_rows = session.execute(
+                    select(DiaryEntryRecord).where(DiaryEntryRecord.is_deleted == False)  # noqa: E712
+                ).scalars().all()
                 rows = [r for r in all_rows
                         if self._entry_matches_student(self._to_entity(r), None, student_name)]
 
             for row in rows:
-                session.delete(row)
+                row.is_deleted = True
+                row.deleted_at = now
+                row.deleted_by = deleted_by or ''
 
             return len(rows)
 
@@ -1894,10 +1954,10 @@ class DiaryPostgresRepository(_BaseRepository):
         teacher_ids = scope.get('teacher_ids') or []
 
         with self._session() as session:
-            stmt = select(DiaryEntryRecord)
+            stmt = select(DiaryEntryRecord).where(DiaryEntryRecord.is_deleted == False)  # noqa: E712
 
             if role == 'admin':
-                pass  # sem filtro
+                pass  # sem filtro adicional
             elif role == 'coordenacao' or (role == 'viewer' and school_id):
                 if not school_id:
                     return []
@@ -2543,6 +2603,102 @@ class ObjectStorageMetadataPostgresRepository:
 
 
 # ---------------------------------------------------------------------------
+# PEI  (Planos Educacionais Individualizados gerados por IA)
+# ---------------------------------------------------------------------------
+
+class PEIPostgresRepository:
+    def __init__(self, session_factory):
+        self._session_factory = session_factory
+
+    @contextmanager
+    def _session(self):
+        session: Session = self._session_factory()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def _to_entity(self, record: PEIRecord, include_markdown: bool = False) -> Dict:
+        entity = {
+            'id': record.id,
+            'student_id': record.student_id or '',
+            'student_name': record.student_name or '',
+            'school': record.school or '',
+            'generated_by_user_id': record.generated_by_user_id or '',
+            'generated_by_username': record.generated_by_username or '',
+            'pdf_filename': record.pdf_filename or '',
+            'object_key': record.object_key or '',
+            'bucket': record.bucket or '',
+            'created_at': record.created_at,
+        }
+        if include_markdown:
+            entity['markdown'] = record.markdown or ''
+        return entity
+
+    def save(
+        self,
+        student_name: str,
+        school: str,
+        markdown_text: str,
+        pdf_filename: str,
+        object_key: str,
+        bucket: str,
+        student_id: Optional[str] = None,
+        generated_by_user_id: Optional[str] = None,
+        generated_by_username: Optional[str] = None,
+        pei_id: Optional[str] = None,
+        created_at: Optional[str] = None,
+    ) -> Dict:
+        pei_id = pei_id or str(uuid.uuid4())
+        record = PEIRecord(
+            id=pei_id,
+            student_id=student_id or None,
+            student_name=student_name,
+            school=school,
+            generated_by_user_id=generated_by_user_id or None,
+            generated_by_username=generated_by_username or None,
+            pdf_filename=pdf_filename,
+            object_key=object_key,
+            bucket=bucket,
+            markdown=markdown_text,
+            created_at=created_at or now_brasilia_iso(),
+        )
+        with self._session() as session:
+            session.merge(record)
+        return self._to_entity(record, include_markdown=True)
+
+    def get(self, pei_id: str) -> Optional[Dict]:
+        with self._session() as session:
+            record = session.execute(
+                select(PEIRecord).where(PEIRecord.id == str(pei_id).strip())
+            ).scalar_one_or_none()
+            if not record:
+                return None
+            return self._to_entity(record, include_markdown=True)
+
+    def list_all(self) -> List[Dict]:
+        with self._session() as session:
+            records = session.execute(
+                select(PEIRecord).order_by(PEIRecord.created_at.desc())
+            ).scalars().all()
+            return [self._to_entity(r) for r in records]
+
+    def delete(self, pei_id: str) -> bool:
+        with self._session() as session:
+            record = session.execute(
+                select(PEIRecord).where(PEIRecord.id == str(pei_id).strip())
+            ).scalar_one_or_none()
+            if not record:
+                return False
+            session.delete(record)
+            return True
+
+
+# ---------------------------------------------------------------------------
 # Chat  (FKs nas sessões e mensagens)
 # ---------------------------------------------------------------------------
 
@@ -2964,6 +3120,11 @@ def _run_migration(engine) -> None:
         "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS teacher_ids JSON",
         "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS parse_warnings JSON",
         "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS anonymized_data JSON",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS deleted_at VARCHAR(40)",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS deleted_by TEXT",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS last_edited_by TEXT",
+        "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS last_edited_at VARCHAR(40)",
         # pdis
         "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS student_name TEXT",
         "ALTER TABLE public.pdis ADD COLUMN IF NOT EXISTS student_grade TEXT",
@@ -3273,5 +3434,6 @@ def create_postgres_repositories(database_url: str):
         'pdi': PDIPostgresRepository(session_factory),
         'form_submission': FormSubmissionsPostgresRepository(session_factory),
         'object_metadata': ObjectStorageMetadataPostgresRepository(session_factory),
+        'pei': PEIPostgresRepository(session_factory),
         'chat_history': ChatHistoryPostgresRepository(session_factory),
     }
