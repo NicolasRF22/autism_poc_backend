@@ -5303,6 +5303,8 @@ def generate_pei():
                 "note": "Dry run ativado: a IA não foi chamada. 'full_prompt_preview' é o prompt exato que seria enviado ao Gemini.",
             })
 
+        _current_user_obj = getattr(g, 'current_user', {}) or {}
+
         result = engine.generate_pei(
             student_name=student_name,
             school=school,
@@ -5351,7 +5353,6 @@ def generate_pei():
         if os.path.exists(temp_pdf_path):
             os.remove(temp_pdf_path)
 
-        _current_user_obj = getattr(g, 'current_user', {}) or {}
         repo = _get_pei_repo()
         if repo:
             entry = repo.save(
