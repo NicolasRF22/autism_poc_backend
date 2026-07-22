@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import json
@@ -7,6 +8,15 @@ from threading import Lock
 from typing import Deque, Dict, Optional, Tuple
 
 from time_utils import now_brasilia
+
+
+_logger = logging.getLogger(__name__)
+_db_repository = None
+
+
+def set_db_repository(repo) -> None:
+    global _db_repository
+    _db_repository = repo
 
 
 # Preços dos modelos Gemini (USD por 1M tokens) — não usar variáveis de ambiente para isso.
@@ -134,30 +144,49 @@ def record_model_usage(
     operation = (operation or 'unspecified').strip() or 'unspecified'
     duration_ms = None if duration_ms is None else max(0, int(duration_ms))
 
+    event = {
+        'timestamp': now.isoformat(),
+        'model': model,
+        'operation': operation,
+        'input_tokens': input_tokens,
+        'output_tokens': output_tokens,
+        'total_tokens': total_tokens,
+    }
+    if duration_ms is not None:
+        event['duration_ms'] = duration_ms
+    if user_id:
+        event['user_id'] = str(user_id)
+    if username:
+        event['username'] = str(username)
+
     with _lock:
         queue = _events_by_model[model]
         queue.append((now, input_tokens, output_tokens, total_tokens, operation))
         _prune(queue, now)
+        if _db_repository is None:
+            with open(_usage_log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(event, ensure_ascii=False) + '\n')
 
-        event = {
-            'timestamp': now.isoformat(),
-            'model': model,
-            'operation': operation,
-            'input_tokens': input_tokens,
-            'output_tokens': output_tokens,
-            'total_tokens': total_tokens,
-        }
-        if duration_ms is not None:
-            event['duration_ms'] = duration_ms
-        if user_id:
-            event['user_id'] = str(user_id)
-        if username:
-            event['username'] = str(username)
-        with open(_usage_log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(event, ensure_ascii=False) + '\n')
+    if _db_repository is not None:
+        try:
+            _db_repository.insert_event(event)
+        except Exception as exc:
+            _logger.warning('Falha ao salvar evento no banco; gravando no JSONL como fallback: %s', exc)
+            try:
+                with open(_usage_log_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(event, ensure_ascii=False) + '\n')
+            except Exception:
+                pass
 
 
 def list_usage_history(limit: Optional[int] = None) -> list:
+    if _db_repository is not None:
+        try:
+            lim = max(1, min(int(limit), 50000)) if limit is not None else None
+            return _db_repository.list_events(limit=lim)
+        except Exception as exc:
+            _logger.warning('Falha ao ler histórico do banco; usando JSONL como fallback: %s', exc)
+
     with _lock:
         with open(_usage_log_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()

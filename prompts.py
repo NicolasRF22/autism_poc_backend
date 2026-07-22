@@ -18,6 +18,8 @@ SYSTEM_PROMPT_PEI = """Você é um especialista em educação inclusiva, autismo
 
 O PEI deve ser completo, abrangendo rigorosamente todos os tópicos e subtópicos listados na estrutura, sem variabilidade. Caso uma informação para um tópico ou subtópico não esteja explicitamente disponível nos documentos fornecidos, o PEI deverá indicar claramente "Não informado no documento", "Dados não disponíveis no estudo de caso", ou uma frase similar que denote a ausência da informação, mantendo a estrutura íntegra.
 
+Regra obrigatória sobre "ID do estudante" e "ID da escola": os dados fornecidos abaixo estão anonimizados — em vez do nome real do estudante e da escola, você receberá um identificador ("ID do estudante" e "ID da escola"). Essa é uma limitação técnica do sistema, não uma ausência de informação: portanto, ao preencher os campos "Nome Completo" (seção 1) e "Escola" (seção 1 e demais menções), copie o valor exato de "ID do estudante" e "ID da escola" fornecido, sem alterá-lo, sem envolvê-lo em explicações como "Não informado no documento (ID: ...)" e sem tentar adivinhar o nome real. Esses dois campos nunca devem receber "Não informado no documento" — use sempre o identificador fornecido.
+
 Tenha em mente as definições de nível de suporte atual da criança com base nos critérios do DSM-5 e justificar a escolha, correlacionando os dados do perfil funcional da criança com as exigências de suporte para comunicação social e comportamentos restritos e repetitivos. Identifique e descreva se o perfil da criança indica uma trajetória de transição de um nível de suporte para outro, embasado em avanços ou desafios observados ao longo do tempo no Estudo de Caso. Use o formato "Nível [N] (com trajetória de N[x] para N[y], se aplicável)".
 
 Nível 1: Exige suporte
@@ -42,7 +44,7 @@ ESTRUTURA PEI
 
 1. Identificação do Estudante
 
-(Todos os itens a seguir devem ser incluídos e preenchidos, indicando "Não informado no documento" se a informação estiver ausente.)
+(Todos os itens a seguir devem ser incluídos e preenchidos, indicando "Não informado no documento" se a informação estiver ausente. Exceção: "Nome Completo" e "Escola" devem sempre usar o "ID do estudante" e "ID da escola" fornecidos, respectivamente — nunca "Não informado no documento" para esses dois.)
    * Nome Completo;
    * Idade;
    * Ano ou série;

@@ -29,10 +29,14 @@ def _parse_table(lines: list) -> list:
 
 
 class PEI_PDF(FPDF):
-    def __init__(self, student_name: str, school: str):
+    def __init__(self, student_name: str, school: str, doc_title: str = "Plano Educacional Individualizado",
+                 doc_subtitle: str = "PEI — Autism.IA", doc_label: str = "PEI"):
         super().__init__()
         self.student_name = student_name
         self.school = school
+        self.doc_title = doc_title
+        self.doc_subtitle = doc_subtitle
+        self.doc_label = doc_label
         self.add_font("DejaVu",  "",   _FONT_REGULAR)
         self.add_font("DejaVu",  "B",  _FONT_BOLD)
         self.add_font("DejaVu",  "I",  _FONT_REGULAR)
@@ -50,7 +54,7 @@ class PEI_PDF(FPDF):
         self.set_font("DejaVu", "I", 8)
         self.set_text_color(150, 150, 150)
         self.cell(0, 8,
-                  f"PEI \u2014 {self.student_name} \u00b7 {self.school}",
+                  f"{self.doc_label} \u2014 {self.student_name} \u00b7 {self.school}",
                   align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.set_draw_color(200, 200, 200)
         self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
@@ -84,12 +88,12 @@ class PEI_PDF(FPDF):
         self.set_y(box_y + 10)
         self.set_font("DejaVu", "B", 20)
         self.set_text_color(30, 80, 160)
-        self.cell(0, 12, "Plano Educacional Individualizado", align="C",
+        self.cell(0, 12, self.doc_title, align="C",
                   new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         self.set_font("DejaVu", "", 12)
         self.set_text_color(74, 144, 217)
-        self.cell(0, 8, "PEI \u2014 Autism.IA", align="C",
+        self.cell(0, 8, self.doc_subtitle, align="C",
                   new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         self.ln(8)
@@ -349,3 +353,29 @@ def markdown_to_pdf(markdown_text: str, student_name: str, school: str,
     pdf = PEI_PDF(student_name=student_name, school=school)
     pdf.render_markdown(markdown_text)
     pdf.output(output_path)
+
+
+def chat_transcript_to_pdf_bytes(messages: list, student_name: str, school: str) -> bytes:
+    """Gera PDF (em memória) com o histórico de um chat, no mesmo estilo visual do PEI."""
+    from time_utils import now_brasilia
+
+    lines = [
+        f"Gerado em: {now_brasilia().strftime('%d/%m/%Y às %H:%M')}",
+        "---",
+        "",
+    ]
+    for msg in messages:
+        speaker = "IA" if msg.get('role') == 'assistant' else "Você"
+        lines.append(f"### {speaker}")
+        lines.append((msg.get('content') or '').strip() or "(mensagem vazia)")
+        lines.append("")
+
+    pdf = PEI_PDF(
+        student_name=student_name,
+        school=school,
+        doc_title="Histórico de Chat",
+        doc_subtitle="Chat — Autism.IA",
+        doc_label="Chat",
+    )
+    pdf.render_markdown("\n".join(lines))
+    return bytes(pdf.output())

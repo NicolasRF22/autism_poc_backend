@@ -163,10 +163,14 @@ class RAGEngine:
         username: Optional[str] = None,
     ) -> Dict:
         """Gera PEI completo estruturado a partir dos documentos indexados."""
-        # 1. Buscar documentos — usa nomes reais para filtrar o ChromaDB
+        # 1. Buscar documentos — filtro no ChromaDB usa nomes reais (contexto local,
+        # não sai para a IA); a query de embeddings usa os IDs anonimizados para não
+        # enviar nome do aluno/escola à API externa de embeddings.
         docs = []
         if include_vector_documents:
-            query_text = f"{student_name} {school} {additional_info}"
+            _embedding_query_student = student_id or student_name
+            _embedding_query_school = school_id or school
+            query_text = f"{_embedding_query_student} {_embedding_query_school} {additional_info}"
             query_embedding = generate_embeddings(
                 query_text,
                 self.api_key,

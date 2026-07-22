@@ -49,6 +49,8 @@ class SchoolRecord(Base):
     address: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     school_registration_completed: Mapped[bool] = mapped_column(nullable=False, default=False, server_default='false')
+    # Respostas do formulário de Cadastro Completo da Escola (chave/valor livre, sem coluna dedicada por campo)
+    registration_answers: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # JSON anônimo para IA — sem dados pessoais (LGPD)
     anonymized_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -98,6 +100,8 @@ class StudentRecord(Base):
     grade: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     school_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     case_study_completed: Mapped[bool] = mapped_column(nullable=False, default=False, server_default='false')
+    # Respostas do formulário de Estudo de Caso (chave/valor livre, sem coluna dedicada por campo)
+    case_study_answers: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # JSON anônimo para IA (LGPD)
     anonymized_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -124,6 +128,32 @@ class TeacherStudentLinkRecord(Base):
     student_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey('students.id', ondelete='CASCADE', name='fk_tsl_student'),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class ParentStudentLinkRecord(Base):
+    """
+    Tabela de junção M:N entre usuários (role='pais') e students.
+    FKs: user_id → user_profiles.id (CASCADE), student_id → students.id (CASCADE)
+    """
+    __tablename__ = 'parent_student_links'
+    __table_args__ = (
+        UniqueConstraint('user_id', 'student_id', name='uq_psl_user_student'),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey('user_profiles.id', ondelete='CASCADE', name='fk_psl_user'),
+        nullable=False,
+        index=True,
+    )
+    student_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey('students.id', ondelete='CASCADE', name='fk_psl_student'),
         nullable=False,
         index=True,
     )
@@ -164,6 +194,37 @@ class DiaryEntryRecord(Base):
     # Auditoria de edição
     last_edited_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_edited_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+
+
+class FamilyDiaryEntryRecord(Base):
+    """
+    Diário Familiar: registros escritos pelos responsáveis (role='pais') sobre o aluno.
+    FKs: student_id → students.id (CASCADE), author_user_id → user_profiles.id (CASCADE)
+    """
+    __tablename__ = 'family_diary_entries'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    student_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey('students.id', ondelete='CASCADE', name='fk_fde_student'),
+        nullable=False,
+        index=True,
+    )
+    author_user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey('user_profiles.id', ondelete='CASCADE', name='fk_fde_author'),
+        nullable=False,
+        index=True,
+    )
+    author_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    entry_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    observations: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # Soft delete
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='false')
+    deleted_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    deleted_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class PDIRecord(Base):
@@ -381,6 +442,25 @@ class ChatMessageRecord(Base):
 
 
 # ---------------------------------------------------------------------------
+# AI Usage Events  (sem FKs — tabela de telemetria independente)
+# ---------------------------------------------------------------------------
+
+class AIUsageEventRecord(Base):
+    __tablename__ = 'ai_usage_events'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    timestamp: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    model: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    operation: Mapped[str] = mapped_column(Text, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    user_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    username: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+# ---------------------------------------------------------------------------
 # Repositórios
 # ---------------------------------------------------------------------------
 
@@ -440,6 +520,7 @@ class PostgresAuthRepository:
         'professor',
         'viewer',
         'avaliador',
+        'pais',
     }
 
     def __init__(self, session_factory, default_admin_username: str = 'admin', default_admin_password: str = ''):
@@ -810,6 +891,7 @@ class SchoolPostgresRepository(_BaseRepository):
 
     def _to_entity(self, record: SchoolRecord) -> Dict:
         return {
+            **(record.registration_answers or {}),
             'id': record.id,
             'municipio_id': record.municipio_id or '',
             'name': record.name or '',
@@ -859,6 +941,7 @@ class SchoolPostgresRepository(_BaseRepository):
                 address=address,
                 notes=notes,
                 school_registration_completed=completed,
+                registration_answers=data or None,
                 anonymized_data=anonymized_data,
                 created_at=created_at or now,
                 updated_at=updated_at or now,
@@ -891,14 +974,14 @@ class SchoolPostgresRepository(_BaseRepository):
             if 'school_registration_completed' in data:
                 record.school_registration_completed = bool(data.pop('school_registration_completed'))
 
+            if data:
+                record.registration_answers = {**(record.registration_answers or {}), **data}
+
             record.anonymized_data = {
                 'school_id': school_id,
                 'institution_type': record.institution_type or '',
             }
             record.updated_at = now_brasilia_iso()
-            if last_edited_by is not None:
-                record.last_edited_by = last_edited_by
-                record.last_edited_at = last_edited_at or now_brasilia_iso()
             return self._to_entity(record)
 
     def get_school(self, school_id: str) -> Optional[Dict]:
@@ -1036,9 +1119,75 @@ class StudentPostgresRepository(_BaseRepository):
             ))
 
     @staticmethod
-    def _student_entity(record: StudentRecord, teacher_ids: List[str], teacher_names: Optional[List[str]] = None) -> Dict:
+    def _get_parent_ids(session: Session, student_id: str) -> List[str]:
+        """Busca parent_ids (usuários com role 'pais') via tabela de junção."""
+        rows = session.execute(
+            select(ParentStudentLinkRecord.user_id).where(
+                ParentStudentLinkRecord.student_id == student_id
+            )
+        ).scalars().all()
+        return list(rows)
+
+    @staticmethod
+    def _get_parent_names_by_ids(session: Session, parent_ids: List[str]) -> List[str]:
+        """Converte lista de parent_ids em lista de nomes de exibição."""
+        if not parent_ids:
+            return []
+        rows = session.execute(
+            select(UserProfileRecord.id, UserProfileRecord.full_name, UserProfileRecord.username).where(
+                UserProfileRecord.id.in_(parent_ids)
+            )
+        ).all()
+        id_to_name = {row.id: (row.full_name or row.username or '') for row in rows}
+        return [id_to_name[pid] for pid in parent_ids if pid in id_to_name]
+
+    @staticmethod
+    def _sync_parent_links(session: Session, student_id: str, parent_ids: List[str]) -> None:
+        """
+        Sincroniza a tabela parent_student_links para o aluno:
+        apaga vínculos antigos e insere os novos.
+        Ignora parent_ids que não correspondam a um usuário com role 'pais' (evita FK violation / vínculo incorreto).
+        """
+        session.execute(
+            delete(ParentStudentLinkRecord).where(
+                ParentStudentLinkRecord.student_id == student_id
+            )
+        )
+        now = now_brasilia_iso()
+        seen: set = set()
+        for pid in parent_ids:
+            pid = (pid or '').strip()
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            exists = session.execute(
+                select(UserProfileRecord.id).where(
+                    UserProfileRecord.id == pid,
+                    UserProfileRecord.role == 'pais',
+                )
+            ).scalar_one_or_none()
+            if exists is None:
+                continue
+            session.add(ParentStudentLinkRecord(
+                id=str(uuid.uuid4()),
+                user_id=pid,
+                student_id=student_id,
+                created_at=now,
+            ))
+
+    @staticmethod
+    def _student_entity(
+        record: StudentRecord,
+        teacher_ids: List[str],
+        teacher_names: Optional[List[str]] = None,
+        parent_ids: Optional[List[str]] = None,
+        parent_names: Optional[List[str]] = None,
+    ) -> Dict:
         names = teacher_names or []
+        p_ids = parent_ids or []
+        p_names = parent_names or []
         return {
+            **(record.case_study_answers or {}),
             'id': record.id,
             'school_id': record.school_id or '',
             'name': record.name or '',
@@ -1053,6 +1202,8 @@ class StudentPostgresRepository(_BaseRepository):
             'teachers': names,
             'teacher_names': names,
             'teacher_name': names[0] if names else '',
+            'parent_ids': p_ids,
+            'parent_names': p_names,
             'anonymized_data': dict(record.anonymized_data or {}),
             'created_at': record.created_at,
             'updated_at': record.updated_at,
@@ -1108,6 +1259,7 @@ class StudentPostgresRepository(_BaseRepository):
                 grade=grade,
                 school_name=school_name,
                 case_study_completed=completed,
+                case_study_answers=data or None,
                 anonymized_data=anonymized_data,
                 created_at=created_at or now,
                 updated_at=updated_at or now,
@@ -1130,6 +1282,7 @@ class StudentPostgresRepository(_BaseRepository):
 
             raw_teacher_ids = data.pop('teacher_ids', None)
             data.pop('teacher_id', None)
+            raw_parent_ids = data.pop('parent_ids', None)
 
             if 'school_id' in data:
                 record.school_id = data.pop('school_id') or None
@@ -1160,6 +1313,9 @@ class StudentPostgresRepository(_BaseRepository):
             if 'case_study_completed' in data:
                 record.case_study_completed = bool(data.pop('case_study_completed'))
 
+            if data:
+                record.case_study_answers = {**(record.case_study_answers or {}), **data}
+
             record.anonymized_data = {
                 'student_id': student_id,
                 'school_id': record.school_id or '',
@@ -1176,8 +1332,15 @@ class StudentPostgresRepository(_BaseRepository):
             else:
                 teacher_ids = self._get_teacher_ids(session, student_id)
 
+            if raw_parent_ids is not None:
+                parent_ids = [str(p) for p in raw_parent_ids if p]
+                self._sync_parent_links(session, student_id, parent_ids)
+            else:
+                parent_ids = self._get_parent_ids(session, student_id)
+
             teacher_names = self._get_teacher_names_by_ids(session, teacher_ids)
-            return self._student_entity(record, teacher_ids, teacher_names)
+            parent_names = self._get_parent_names_by_ids(session, parent_ids)
+            return self._student_entity(record, teacher_ids, teacher_names, parent_ids, parent_names)
 
     def get_student(self, student_id: str) -> Optional[Dict]:
         with self._session() as session:
@@ -1186,7 +1349,9 @@ class StudentPostgresRepository(_BaseRepository):
                 return None
             teacher_ids = self._get_teacher_ids(session, student_id)
             teacher_names = self._get_teacher_names_by_ids(session, teacher_ids)
-            return self._student_entity(record, teacher_ids, teacher_names)
+            parent_ids = self._get_parent_ids(session, student_id)
+            parent_names = self._get_parent_names_by_ids(session, parent_ids)
+            return self._student_entity(record, teacher_ids, teacher_names, parent_ids, parent_names)
 
     def list_all_students(self) -> List[Dict]:
         with self._session() as session:
@@ -1208,15 +1373,26 @@ class StudentPostgresRepository(_BaseRepository):
             ).all() if all_teacher_ids else []
             teacher_id_to_name = {r.id: (r.name or '') for r in teacher_name_rows}
 
+            parent_link_rows = session.execute(
+                select(ParentStudentLinkRecord).where(
+                    ParentStudentLinkRecord.student_id.in_(student_ids)
+                )
+            ).scalars().all()
+
         teacher_ids_map: Dict[str, List[str]] = {}
         for link in link_rows:
             teacher_ids_map.setdefault(link.student_id, []).append(link.teacher_id)
+
+        parent_ids_map: Dict[str, List[str]] = {}
+        for link in parent_link_rows:
+            parent_ids_map.setdefault(link.student_id, []).append(link.user_id)
 
         summaries = []
         for row in rows:
             teacher_ids = teacher_ids_map.get(row.id, [])
             t_names = [teacher_id_to_name[tid] for tid in teacher_ids if tid in teacher_id_to_name]
-            student = self._student_entity(row, teacher_ids, t_names)
+            parent_ids = parent_ids_map.get(row.id, [])
+            student = self._student_entity(row, teacher_ids, t_names, parent_ids)
             summaries.append({
                 'id': student['id'],
                 'name': student.get('name', student.get('studentName', '')),
@@ -1228,6 +1404,7 @@ class StudentPostgresRepository(_BaseRepository):
                 'teachers': t_names,
                 'teacher_names': t_names,
                 'teacher_name': t_names[0] if t_names else '',
+                'parent_ids': parent_ids,
                 'class': student.get('class', student.get('className', '')),
                 'grade': student.get('grade', student.get('schoolYear', '')),
                 'case_study_completed': bool(student.get('case_study_completed', False)),
@@ -2006,6 +2183,92 @@ class DiaryPostgresRepository(_BaseRepository):
                 linked_count += 1
 
         return linked_count
+
+
+# ---------------------------------------------------------------------------
+# Family Diary  (Diário Familiar — escrito pelos responsáveis; FK: student_id →
+# students CASCADE, author_user_id → user_profiles CASCADE)
+# ---------------------------------------------------------------------------
+
+class FamilyDiaryPostgresRepository(_BaseRepository):
+    def __init__(self, session_factory):
+        super().__init__(session_factory, FamilyDiaryEntryRecord)
+
+    @staticmethod
+    def _to_entity(record: FamilyDiaryEntryRecord) -> Dict:
+        return {
+            'id': record.id,
+            'student_id': record.student_id or '',
+            'author_user_id': record.author_user_id or '',
+            'author_name': record.author_name or '',
+            'entry_date': record.entry_date or '',
+            'observations': record.observations or '',
+            'created_at': record.created_at,
+            'updated_at': record.updated_at or '',
+            'is_deleted': bool(record.is_deleted),
+            'deleted_at': record.deleted_at or '',
+            'deleted_by': record.deleted_by or '',
+        }
+
+    def create_entry(
+        self,
+        student_id: str,
+        author_user_id: str,
+        author_name: str,
+        entry_date: str,
+        observations: str,
+    ) -> Dict:
+        now = now_brasilia_iso()
+        entry_id = str(uuid.uuid4())
+        with self._session() as session:
+            record = FamilyDiaryEntryRecord(
+                id=entry_id,
+                student_id=student_id,
+                author_user_id=author_user_id,
+                author_name=author_name,
+                entry_date=entry_date,
+                observations=observations,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(record)
+            session.flush()
+            return self._to_entity(record)
+
+    def get_entry(self, entry_id: str) -> Optional[Dict]:
+        return self._get(entry_id)
+
+    def get_entries_by_student(self, student_id: str) -> List[Dict]:
+        with self._session() as session:
+            rows = session.execute(
+                select(FamilyDiaryEntryRecord).where(
+                    FamilyDiaryEntryRecord.student_id == student_id,
+                    FamilyDiaryEntryRecord.is_deleted == False,  # noqa: E712
+                )
+            ).scalars().all()
+        entries = [self._to_entity(row) for row in rows]
+        return sorted(entries, key=lambda x: x.get('created_at', ''), reverse=True)
+
+    def update_entry(self, entry_id: str, observations: str, entry_date: Optional[str] = None) -> Optional[Dict]:
+        with self._session() as session:
+            record = session.get(FamilyDiaryEntryRecord, entry_id)
+            if not record:
+                return None
+            record.observations = observations
+            if entry_date is not None:
+                record.entry_date = entry_date
+            record.updated_at = now_brasilia_iso()
+            return self._to_entity(record)
+
+    def delete_entry(self, entry_id: str, deleted_by: Optional[str] = None) -> bool:
+        with self._session() as session:
+            record = session.get(FamilyDiaryEntryRecord, entry_id)
+            if not record:
+                return False
+            record.is_deleted = True
+            record.deleted_at = now_brasilia_iso()
+            record.deleted_by = deleted_by or ''
+            return True
 
 
 # ---------------------------------------------------------------------------
@@ -3089,6 +3352,7 @@ def _run_migration(engine) -> None:
         "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS address JSON",
         "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS notes TEXT",
         "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS school_registration_completed BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS registration_answers JSON",
         "ALTER TABLE public.schools ADD COLUMN IF NOT EXISTS anonymized_data JSON",
         # teachers
         "ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS name TEXT",
@@ -3106,6 +3370,7 @@ def _run_migration(engine) -> None:
         "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS grade TEXT",
         "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS school_name TEXT",
         "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS case_study_completed BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS case_study_answers JSON",
         "ALTER TABLE public.students ADD COLUMN IF NOT EXISTS anonymized_data JSON",
         # diary_entries
         "ALTER TABLE public.diary_entries ADD COLUMN IF NOT EXISTS source TEXT",
@@ -3411,6 +3676,48 @@ def _run_migration(engine) -> None:
     run_batch(constraint_stmts,     "constraints")
 
 
+class AIUsageRepository(_BaseRepository):
+    def __init__(self, session_factory):
+        super().__init__(session_factory, AIUsageEventRecord)
+
+    def insert_event(self, event: dict) -> None:
+        with self._session() as session:
+            record = AIUsageEventRecord(
+                id=str(uuid.uuid4()),
+                timestamp=event.get('timestamp', ''),
+                model=event['model'],
+                operation=event.get('operation', 'unspecified'),
+                input_tokens=event.get('input_tokens', 0),
+                output_tokens=event.get('output_tokens', 0),
+                total_tokens=event.get('total_tokens', 0),
+                duration_ms=event.get('duration_ms'),
+                user_id=event.get('user_id'),
+                username=event.get('username'),
+            )
+            session.add(record)
+
+    def list_events(self, limit: Optional[int] = None) -> List[Dict]:
+        with self._session() as session:
+            stmt = select(AIUsageEventRecord).order_by(AIUsageEventRecord.timestamp.desc())
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            rows = session.execute(stmt).scalars().all()
+            return [
+                {
+                    'timestamp': r.timestamp,
+                    'model': r.model,
+                    'operation': r.operation,
+                    'input_tokens': r.input_tokens,
+                    'output_tokens': r.output_tokens,
+                    'total_tokens': r.total_tokens,
+                    **({'duration_ms': r.duration_ms} if r.duration_ms is not None else {}),
+                    **({'user_id': r.user_id} if r.user_id else {}),
+                    **({'username': r.username} if r.username else {}),
+                }
+                for r in rows
+            ]
+
+
 def create_postgres_repositories(database_url: str):
     engine = create_engine(database_url, future=True)
     # Cria tabelas que ainda não existem (idempotente)
@@ -3431,9 +3738,11 @@ def create_postgres_repositories(database_url: str):
         'student': StudentPostgresRepository(session_factory),
         'teacher': TeacherPostgresRepository(session_factory),
         'diary': DiaryPostgresRepository(session_factory),
+        'family_diary': FamilyDiaryPostgresRepository(session_factory),
         'pdi': PDIPostgresRepository(session_factory),
         'form_submission': FormSubmissionsPostgresRepository(session_factory),
         'object_metadata': ObjectStorageMetadataPostgresRepository(session_factory),
         'pei': PEIPostgresRepository(session_factory),
         'chat_history': ChatHistoryPostgresRepository(session_factory),
+        'usage_events': AIUsageRepository(session_factory),
     }

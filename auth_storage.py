@@ -15,6 +15,7 @@ VALID_ROLES = {
     "professor",
     "viewer",
     "avaliador",
+    "pais",
 }
 
 DEFAULT_EVALUATOR_SCOPE = {
