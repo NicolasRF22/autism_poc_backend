@@ -25,6 +25,27 @@ _THUMB_CACHE: Dict[str, bytes] = {}
 _THUMB_MAX_DIMENSION = 300
 _THUMB_CACHE_LIMIT = 500
 
+# Imagens de diário (escolar/familiar) são imutáveis por image_id — um upload novo sempre
+# gera um UUID novo, nunca sobrescreve um existente. Por isso é seguro cachear agressivamente
+# no navegador. 'private' porque são fotos de alunos (dado sensível/LGPD): só o cache local
+# do navegador pode guardar, nunca um proxy/CDN compartilhado. A URL já inclui ?token=<jwt>
+# (expira em AUTH_TOKEN_EXP_MINUTES, ~8h por padrão), então o cache nunca sobrevive além disso
+# de qualquer forma — o max_age aqui só evita reforçar/baixar de novo dentro da mesma sessão.
+_IMAGE_CACHE_MAX_AGE = 86400  # 1 dia
+
+
+def _send_cached_image(file_stream, mimetype: str, image_id: str, download_name: Optional[str] = None):
+    """send_file com cache HTTP agressivo (Cache-Control + ETag) para imagens imutáveis."""
+    response = send_file(
+        file_stream,
+        mimetype=mimetype,
+        as_attachment=False,
+        download_name=download_name,
+        etag=image_id,
+    )
+    response.headers['Cache-Control'] = f'private, max-age={_IMAGE_CACHE_MAX_AGE}, immutable'
+    return response
+
 
 def _to_bool(value: str, default: bool = False) -> bool:
     if value is None:
@@ -539,8 +560,8 @@ def _get_diary_entries_for_student(student_name: str, student_id: str = '') -> L
 DIARY_ENTRIES_HARD_CAP = 60
 
 
-def _filter_diary_entries_by_date(entries: List[Dict], start_date: str = '', end_date: str = '') -> List[Dict]:
-    """Filtra entradas de diário por período (datas ISO 'YYYY-MM-DD', comparação lexicográfica)."""
+def _filter_diary_entries_by_date(entries: List[Dict], start_date: str = '', end_date: str = '', date_key: str = 'diary_date') -> List[Dict]:
+    """Filtra entradas de diário (escolar ou familiar) por período (datas ISO 'YYYY-MM-DD', comparação lexicográfica)."""
     start_date = (start_date or '').strip()
     end_date = (end_date or '').strip()
     if not start_date and not end_date:
@@ -548,7 +569,7 @@ def _filter_diary_entries_by_date(entries: List[Dict], start_date: str = '', end
 
     filtered = []
     for entry in entries:
-        entry_date = (entry.get('diary_date') or '').strip()
+        entry_date = (entry.get(date_key) or '').strip()
         if not entry_date:
             continue
         if start_date and entry_date < start_date:
@@ -557,6 +578,16 @@ def _filter_diary_entries_by_date(entries: List[Dict], start_date: str = '', end
             continue
         filtered.append(entry)
     return filtered
+
+
+def _get_family_diary_entries_for_student(student_id: str) -> List[Dict]:
+    """Retorna entradas do Diário Familiar de um aluno (só Postgres; sem fallback por nome)."""
+    if not student_id:
+        return []
+    repo = _family_diary_repo()
+    if not repo:
+        return []
+    return repo.get_entries_by_student(student_id)
 
 
 def _get_pdi_for_student(student_name: str, student_id: str = '') -> Dict | None:
@@ -628,6 +659,7 @@ def _default_pei_source_selection() -> Dict[str, bool]:
     return {
         'vector_documents': True,
         'diary': True,
+        'family_diary': True,
         'pdi': True,
         'student_pre_registration': True,
         'teachers_pre_registration': True,
@@ -905,6 +937,8 @@ def _build_anonymized_student_context(
     engine=None,
     diary_start_date: str = '',
     diary_end_date: str = '',
+    family_diary_start_date: str = '',
+    family_diary_end_date: str = '',
     selected_pei_ids: Optional[List[str]] = None,
 ) -> str:
     """Constrói contexto integrado usando apenas dados anonimizados (sem nomes reais) para envio à IA."""
@@ -974,6 +1008,31 @@ def _build_anonymized_student_context(
             + json.dumps(anon_entries, ensure_ascii=False, indent=2)
         )
 
+    family_diary_entries = _get_family_diary_entries_for_student(student_id)
+    family_diary_entries = _filter_diary_entries_by_date(
+        family_diary_entries, family_diary_start_date, family_diary_end_date, date_key='entry_date'
+    )
+    if source_selection.get('family_diary') and family_diary_entries:
+        has_explicit_family_period = bool(family_diary_start_date or family_diary_end_date)
+        family_entries_to_use = family_diary_entries if has_explicit_family_period else family_diary_entries[:max_diary_entries]
+        family_entries_to_use = family_entries_to_use[:DIARY_ENTRIES_HARD_CAP]
+        # Diário Familiar não tem anonymized_data (texto livre dos pais) — redige nomes
+        # conhecidos (aluno/escola/docentes) na hora, mesmo mecanismo usado nos PDFs do RAG.
+        redact_map = _collect_deanonymization_map(student_record, school_record, linked_teacher_records)
+        anon_family_entries = [
+            {
+                'entry_date': e.get('entry_date', ''),
+                'observations': _anonymize_known_names(e.get('observations', ''), redact_map),
+            }
+            for e in family_entries_to_use
+        ]
+        sections.append(
+            ('Diário Familiar anonimizado (JSON, período selecionado pelo usuário):\n'
+             if has_explicit_family_period else
+             'Diário Familiar anonimizado (JSON, entradas mais recentes):\n')
+            + json.dumps(anon_family_entries, ensure_ascii=False, indent=2)
+        )
+
     pdi = _get_pdi_for_student(canonical_student_name, student_id=student_id)
 
     if source_selection.get('pdi') and pdi:
@@ -1030,6 +1089,8 @@ def get_pei_sources_preview():
     school = request.args.get('school', '').strip()
     diary_start_date = request.args.get('diary_start_date', '').strip()
     diary_end_date = request.args.get('diary_end_date', '').strip()
+    family_diary_start_date = request.args.get('family_diary_start_date', '').strip()
+    family_diary_end_date = request.args.get('family_diary_end_date', '').strip()
 
     student = None
     if student_id:
@@ -1074,6 +1135,7 @@ def get_pei_sources_preview():
         school_future = executor.submit(_get_school_record, school_id) if school_id else None
         teacher_futures = [executor.submit(_get_teacher_record, tid) for tid in teacher_ids]
         diary_future = executor.submit(_get_diary_entries_for_student, student_name, student_id=student_id)
+        family_diary_future = executor.submit(_get_family_diary_entries_for_student, student_id)
         pdi_future = executor.submit(_get_pdi_for_student, student_name, student_id=student_id)
         peis_future = executor.submit(_list_linked_peis, student_name, student_id=student_id, school=school)
         docs_future = executor.submit(_summarize_vector_documents_for_student, engine, student_name, school)
@@ -1081,11 +1143,15 @@ def get_pei_sources_preview():
         school_record = school_future.result() if school_future else None
         teacher_records = [f.result() for f in teacher_futures if f.result()]
         diary_entries_all = diary_future.result()
+        family_diary_entries_all = family_diary_future.result()
         pdi = pdi_future.result()
         linked_peis = peis_future.result()
         docs_summary = docs_future.result()
 
     diary_entries = _filter_diary_entries_by_date(diary_entries_all, diary_start_date, diary_end_date)
+    family_diary_entries = _filter_diary_entries_by_date(
+        family_diary_entries_all, family_diary_start_date, family_diary_end_date, date_key='entry_date'
+    )
 
     return jsonify({
         "student_name": student_name,
@@ -1128,6 +1194,20 @@ def get_pei_sources_preview():
                     for item in diary_entries[:3]
                 ],
                 "excerpt": _extract_entry_excerpt(diary_entries[0]) if diary_entries else '',
+            },
+            "family_diary": {
+                "included": len(family_diary_entries) > 0,
+                "entries_count": len(family_diary_entries),
+                "total_entries_count": len(family_diary_entries_all),
+                "entries": [
+                    {
+                        'id': item.get('id'),
+                        'diary_date': item.get('entry_date'),
+                        'excerpt': _extract_entry_excerpt(item),
+                    }
+                    for item in family_diary_entries[:3]
+                ],
+                "excerpt": _extract_entry_excerpt(family_diary_entries[0]) if family_diary_entries else '',
             },
             "pdi": {
                 "included": bool(pdi),
@@ -2958,6 +3038,11 @@ def get_student_entries(student_name):
 
         entries = _read_with_optional_fallback('diary', _diary_storage, 'get_entries_by_student', student_name)
         visible_entries = [entry for entry in entries if _entry_visible_to_user(entry)]
+
+        images_by_entry = _diary_images_by_entry()
+        for entry in visible_entries:
+            entry['images'] = images_by_entry.get(str(entry.get('id') or ''), [])
+
         return jsonify(visible_entries)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -3428,9 +3513,39 @@ def upload_diary_images(entry_id):
     }), 201
 
 
+def _diary_image_entry(file_meta: Dict) -> Dict:
+    extra = file_meta.get('extra') or {}
+    return {
+        'image_id': file_meta.get('reference_id'),
+        'file_name': file_meta.get('original_filename'),
+        'mime_type': file_meta.get('mime_type'),
+        'size_bytes': file_meta.get('size_bytes'),
+        'created_at': file_meta.get('created_at'),
+        'caption': (extra.get('caption') or ''),
+        'view_url': f"/diary/images/{file_meta.get('reference_id')}",
+        'thumb_url': f"/diary/images/{file_meta.get('reference_id')}/thumb",
+    }
+
+
+def _diary_images_by_entry() -> Dict[str, List[Dict]]:
+    """Busca TODAS as imagens do Diário Individual de uma vez e agrupa por entry_id.
+    Evita N+1: uma única query em vez de uma por entrada (mesmo padrão do Diário Familiar,
+    ver _family_diary_images_by_entry)."""
+    files = _list_object_metadata(DIARY_IMAGE_DOC_TYPE, DIARY_IMAGES_BUCKET)
+    grouped: Dict[str, List[Dict]] = {}
+    for file_meta in files:
+        extra = file_meta.get('extra') or {}
+        entry_id = str(extra.get('diary_entry_id') or '').strip()
+        if not entry_id:
+            continue
+        grouped.setdefault(entry_id, []).append(_diary_image_entry(file_meta))
+    return grouped
+
+
 @app.route('/api/diary/entries/<entry_id>/images', methods=['GET'])
 def list_diary_images(entry_id):
-    """Lista imagens vinculadas a uma entrada de diario."""
+    """Lista imagens vinculadas a uma entrada de diario (uso pontual; a listagem por aluno
+    já embute as imagens via /api/diary/entries/<student_name>)."""
     entry = _ensure_diary_entry_visible(entry_id)
     if not entry:
         return jsonify({"error": "Entrada não encontrada"}), 404
@@ -3441,16 +3556,7 @@ def list_diary_images(entry_id):
         extra = file_meta.get('extra') or {}
         if str(extra.get('diary_entry_id') or '') != str(entry_id):
             continue
-        results.append({
-            'image_id': file_meta.get('reference_id'),
-            'file_name': file_meta.get('original_filename'),
-            'mime_type': file_meta.get('mime_type'),
-            'size_bytes': file_meta.get('size_bytes'),
-            'created_at': file_meta.get('created_at'),
-            'caption': (extra.get('caption') or ''),
-            'view_url': f"/diary/images/{file_meta.get('reference_id')}",
-            'thumb_url': f"/diary/images/{file_meta.get('reference_id')}/thumb",
-        })
+        results.append(_diary_image_entry(file_meta))
 
     return jsonify(results)
 
@@ -3474,10 +3580,10 @@ def get_diary_image(image_id):
     except FileNotFoundError:
         return jsonify({"error": "Imagem não disponível"}), 404
 
-    return send_file(
+    return _send_cached_image(
         BytesIO(file_bytes),
-        mimetype=file_meta.get('mime_type') or 'image/*',
-        as_attachment=False,
+        file_meta.get('mime_type') or 'image/*',
+        image_id,
         download_name=file_meta.get('original_filename') or f'{image_id}',
     )
 
@@ -3485,9 +3591,6 @@ def get_diary_image(image_id):
 @app.route('/api/diary/images/<image_id>/thumb', methods=['GET'])
 def get_diary_image_thumb(image_id):
     """Serve thumbnail redimensionado (max 300px) de imagem do diário."""
-    if image_id in _THUMB_CACHE:
-        return send_file(BytesIO(_THUMB_CACHE[image_id]), mimetype='image/jpeg', as_attachment=False)
-
     file_meta = _get_object_metadata(DIARY_IMAGE_DOC_TYPE, image_id)
     if not file_meta:
         return jsonify({"error": "Imagem não encontrada"}), 404
@@ -3497,6 +3600,9 @@ def get_diary_image_thumb(image_id):
     entry = _ensure_diary_entry_visible(entry_id)
     if not entry:
         return _scope_forbidden()
+
+    if image_id in _THUMB_CACHE:
+        return _send_cached_image(BytesIO(_THUMB_CACHE[image_id]), 'image/jpeg', image_id)
 
     object_key = file_meta.get('object_key')
     try:
@@ -3515,7 +3621,7 @@ def get_diary_image_thumb(image_id):
     if len(_THUMB_CACHE) < _THUMB_CACHE_LIMIT:
         _THUMB_CACHE[image_id] = thumb_bytes
 
-    return send_file(BytesIO(thumb_bytes), mimetype='image/jpeg', as_attachment=False)
+    return _send_cached_image(BytesIO(thumb_bytes), 'image/jpeg', image_id)
 
 
 @app.route('/api/diary/images/<image_id>', methods=['DELETE'])
@@ -3609,9 +3715,37 @@ def create_family_diary_entry():
     return jsonify({"message": "Entrada criada com sucesso", "entry": entry}), 201
 
 
+def _family_diary_image_entry(file_meta: Dict) -> Dict:
+    extra = file_meta.get('extra') or {}
+    return {
+        'image_id': file_meta.get('reference_id'),
+        'file_name': file_meta.get('original_filename'),
+        'mime_type': file_meta.get('mime_type'),
+        'size_bytes': file_meta.get('size_bytes'),
+        'created_at': file_meta.get('created_at'),
+        'caption': (extra.get('caption') or ''),
+        'view_url': f"/family-diary/images/{file_meta.get('reference_id')}",
+        'thumb_url': f"/family-diary/images/{file_meta.get('reference_id')}/thumb",
+    }
+
+
+def _family_diary_images_by_entry() -> Dict[str, List[Dict]]:
+    """Busca TODAS as imagens do Diário Familiar de uma vez e agrupa por entry_id.
+    Evita N+1: uma única query em vez de uma por entrada."""
+    files = _list_object_metadata(FAMILY_DIARY_IMAGE_DOC_TYPE, DIARY_IMAGES_BUCKET)
+    grouped: Dict[str, List[Dict]] = {}
+    for file_meta in files:
+        extra = file_meta.get('extra') or {}
+        entry_id = str(extra.get('family_diary_entry_id') or '').strip()
+        if not entry_id:
+            continue
+        grouped.setdefault(entry_id, []).append(_family_diary_image_entry(file_meta))
+    return grouped
+
+
 @app.route('/api/family-diary/entries/<student_id>', methods=['GET'])
 def list_family_diary_entries(student_id):
-    """Lista entradas do Diário Familiar de um aluno, se visível ao usuário atual."""
+    """Lista entradas do Diário Familiar de um aluno (com imagens embutidas), se visível ao usuário atual."""
     repo = _family_diary_repo()
     if not repo:
         return jsonify({"error": "Diário Familiar indisponível"}), 503
@@ -3620,7 +3754,12 @@ def list_family_diary_entries(student_id):
     if not student or not _student_visible_to_user(student):
         return _scope_forbidden('Sem acesso a este aluno')
 
-    return jsonify(repo.get_entries_by_student(student_id))
+    entries = repo.get_entries_by_student(student_id)
+    images_by_entry = _family_diary_images_by_entry()
+    for entry in entries:
+        entry['images'] = images_by_entry.get(str(entry.get('id') or ''), [])
+
+    return jsonify(entries)
 
 
 @app.route('/api/family-diary/entry/<entry_id>', methods=['PUT'])
@@ -3746,7 +3885,8 @@ def upload_family_diary_images(entry_id):
 
 @app.route('/api/family-diary/entries/<entry_id>/images', methods=['GET'])
 def list_family_diary_images(entry_id):
-    """Lista imagens vinculadas a uma entrada do Diário Familiar."""
+    """Lista imagens vinculadas a uma entrada do Diário Familiar (uso pontual; a listagem
+    por aluno já embute as imagens via /api/family-diary/entries/<student_id>)."""
     entry = _ensure_family_diary_entry_visible(entry_id)
     if not entry:
         return jsonify({"error": "Entrada não encontrada"}), 404
@@ -3757,16 +3897,7 @@ def list_family_diary_images(entry_id):
         extra = file_meta.get('extra') or {}
         if str(extra.get('family_diary_entry_id') or '') != str(entry_id):
             continue
-        results.append({
-            'image_id': file_meta.get('reference_id'),
-            'file_name': file_meta.get('original_filename'),
-            'mime_type': file_meta.get('mime_type'),
-            'size_bytes': file_meta.get('size_bytes'),
-            'created_at': file_meta.get('created_at'),
-            'caption': (extra.get('caption') or ''),
-            'view_url': f"/family-diary/images/{file_meta.get('reference_id')}",
-            'thumb_url': f"/family-diary/images/{file_meta.get('reference_id')}/thumb",
-        })
+        results.append(_family_diary_image_entry(file_meta))
 
     return jsonify(results)
 
@@ -3790,10 +3921,10 @@ def get_family_diary_image(image_id):
     except FileNotFoundError:
         return jsonify({"error": "Imagem não disponível"}), 404
 
-    return send_file(
+    return _send_cached_image(
         BytesIO(file_bytes),
-        mimetype=file_meta.get('mime_type') or 'image/*',
-        as_attachment=False,
+        file_meta.get('mime_type') or 'image/*',
+        image_id,
         download_name=file_meta.get('original_filename') or f'{image_id}',
     )
 
@@ -3801,9 +3932,6 @@ def get_family_diary_image(image_id):
 @app.route('/api/family-diary/images/<image_id>/thumb', methods=['GET'])
 def get_family_diary_image_thumb(image_id):
     """Serve thumbnail redimensionado (max 300px) de imagem do Diário Familiar."""
-    if image_id in _THUMB_CACHE:
-        return send_file(BytesIO(_THUMB_CACHE[image_id]), mimetype='image/jpeg', as_attachment=False)
-
     file_meta = _get_object_metadata(FAMILY_DIARY_IMAGE_DOC_TYPE, image_id)
     if not file_meta:
         return jsonify({"error": "Imagem não encontrada"}), 404
@@ -3813,6 +3941,9 @@ def get_family_diary_image_thumb(image_id):
     entry = _ensure_family_diary_entry_visible(entry_id)
     if not entry:
         return _scope_forbidden()
+
+    if image_id in _THUMB_CACHE:
+        return _send_cached_image(BytesIO(_THUMB_CACHE[image_id]), 'image/jpeg', image_id)
 
     object_key = file_meta.get('object_key')
     try:
@@ -3831,7 +3962,7 @@ def get_family_diary_image_thumb(image_id):
     if len(_THUMB_CACHE) < _THUMB_CACHE_LIMIT:
         _THUMB_CACHE[image_id] = thumb_bytes
 
-    return send_file(BytesIO(thumb_bytes), mimetype='image/jpeg', as_attachment=False)
+    return _send_cached_image(BytesIO(thumb_bytes), 'image/jpeg', image_id)
 
 
 @app.route('/api/family-diary/images/<image_id>', methods=['DELETE'])
@@ -5468,6 +5599,8 @@ def rag_chat():
                 engine=engine,
                 diary_start_date=(data.get('diary_start_date') or '').strip(),
                 diary_end_date=(data.get('diary_end_date') or '').strip(),
+                family_diary_start_date=(data.get('family_diary_start_date') or '').strip(),
+                family_diary_end_date=(data.get('family_diary_end_date') or '').strip(),
                 selected_pei_ids=data.get('selected_pei_ids'),
             )
             _chat_student = _get_student_record(student_id) if student_id else None
@@ -5852,6 +5985,8 @@ def generate_pei():
             engine=engine,
             diary_start_date=(data.get('diary_start_date') or '').strip(),
             diary_end_date=(data.get('diary_end_date') or '').strip(),
+            family_diary_start_date=(data.get('family_diary_start_date') or '').strip(),
+            family_diary_end_date=(data.get('family_diary_end_date') or '').strip(),
             selected_pei_ids=data.get('selected_pei_ids'),
         )
 
