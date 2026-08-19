@@ -146,6 +146,50 @@ class RAGEngine:
         }
 
     # ------------------------------------------------------------------
+    # Chat direto (sem RAG) — usado no Resumo Diário: o contexto já vem pronto
+    # no system_prompt (montado pelo chamador a partir das entradas selecionadas).
+    # ------------------------------------------------------------------
+    def direct_chat(
+        self,
+        message: str,
+        session_id: str,
+        system_prompt: str,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> Dict:
+        """Chat multi-turno simples: sem busca vetorial, sem contexto extra —
+        o system_prompt já contém tudo que a IA deve saber. Reaproveita o mesmo
+        mecanismo de sessão de `query()` (uma sessão por session_id+hash do prompt)."""
+        chat_system_prompt = (system_prompt or '').strip()
+        chat_session_key = f"{session_id}::{hash(chat_system_prompt)}"
+        if chat_session_key not in self.chat_sessions:
+            self.chat_sessions[chat_session_key] = self.client.chats.create(
+                model=self.generation_model,
+                config=types.GenerateContentConfig(
+                    system_instruction=chat_system_prompt,
+                ),
+            )
+
+        chat = self.chat_sessions[chat_session_key]
+        response = chat.send_message(message)
+        usage = extract_usage_metrics(response, fallback_text=message)
+
+        record_model_usage(
+            self.generation_model,
+            input_tokens=usage['input_tokens'],
+            output_tokens=usage['output_tokens'],
+            total_tokens=usage['total_tokens'],
+            operation='diary_summary_chat',
+            user_id=user_id,
+            username=username,
+        )
+
+        return {
+            "response": response.text,
+            "usage": usage,
+        }
+
+    # ------------------------------------------------------------------
     # Geração de PEI
     # ------------------------------------------------------------------
     def generate_pei(

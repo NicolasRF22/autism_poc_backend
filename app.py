@@ -580,6 +580,31 @@ def _filter_diary_entries_by_date(entries: List[Dict], start_date: str = '', end
     return filtered
 
 
+def _filter_diary_summaries_by_period(summaries: List[Dict], start_date: str = '', end_date: str = '') -> List[Dict]:
+    """Filtra resumos salvos (Resumo Diário) por interseção de período — diferente de
+    _filter_diary_entries_by_date porque um resumo tem um intervalo (period_start..period_end),
+    não uma data única. Sem filtro, retorna todos."""
+    start_date = (start_date or '').strip()
+    end_date = (end_date or '').strip()
+    if not start_date and not end_date:
+        return summaries
+
+    filtered = []
+    for summary in summaries:
+        summary_start = (summary.get('period_start') or '').strip()
+        summary_end = (summary.get('period_end') or '').strip()
+        if not summary_start and not summary_end:
+            continue
+        # Sem interseção se o resumo termina antes do filtro começar, ou começa depois
+        # do filtro terminar.
+        if end_date and summary_start and summary_start > end_date:
+            continue
+        if start_date and summary_end and summary_end < start_date:
+            continue
+        filtered.append(summary)
+    return filtered
+
+
 def _get_family_diary_entries_for_student(student_id: str) -> List[Dict]:
     """Retorna entradas do Diário Familiar de um aluno (só Postgres; sem fallback por nome)."""
     if not student_id:
@@ -588,6 +613,25 @@ def _get_family_diary_entries_for_student(student_id: str) -> List[Dict]:
     if not repo:
         return []
     return repo.get_entries_by_student(student_id)
+
+
+def _get_diary_summaries_for_student(student_id: str) -> List[Dict]:
+    """Retorna resumos salvos (Resumo Diário) de um aluno (só Postgres)."""
+    if not student_id or not _postgres_repositories:
+        return []
+    repo = _postgres_repositories.get('diary_summary')
+    if not repo:
+        return []
+    return repo.get_summaries_by_student(student_id)
+
+
+def _diary_summary_covers_type(summary: Dict, entry_type: str) -> bool:
+    """True se o resumo foi gerado a partir de ao menos uma entrada do tipo dado
+    ('escolar' ou 'familiar') — um resumo "ambos" cobre os dois tipos."""
+    for ref in (summary.get('source_entries') or []):
+        if ref.get('type') == entry_type:
+            return True
+    return False
 
 
 def _get_pdi_for_student(student_name: str, student_id: str = '') -> Dict | None:
@@ -660,6 +704,8 @@ def _default_pei_source_selection() -> Dict[str, bool]:
         'vector_documents': True,
         'diary': True,
         'family_diary': True,
+        'diary_summary_individual': True,
+        'diary_summary_family': True,
         'pdi': True,
         'student_pre_registration': True,
         'teachers_pre_registration': True,
@@ -853,6 +899,8 @@ def _build_integrated_student_context(
         f'- teachers_pre_registration_included: {str(source_selection.get("teachers_pre_registration") and len(linked_teacher_records) > 0).lower()}\n'
         f'- school_pre_registration_included: {str(source_selection.get("school_pre_registration") and bool(school_record)).lower()}\n'
         f'- linked_peis_included: {str(source_selection.get("linked_peis") and len(linked_peis) > 0).lower()}\n'
+        f'- resumo_diario_individual_included: {str(source_selection.get("diary_summary_individual") and len(individual_summaries) > 0).lower()}\n'
+        f'- resumo_diario_familiar_included: {str(source_selection.get("diary_summary_family") and len(family_summaries) > 0).lower()}\n'
         'Regra: não classifique PDI como Diário. Se diario_entries_count = 0, responda que não há diário cadastrado.'
     )
     sections.insert(0, source_status)
@@ -939,6 +987,10 @@ def _build_anonymized_student_context(
     diary_end_date: str = '',
     family_diary_start_date: str = '',
     family_diary_end_date: str = '',
+    diary_summary_individual_start_date: str = '',
+    diary_summary_individual_end_date: str = '',
+    diary_summary_family_start_date: str = '',
+    diary_summary_family_end_date: str = '',
     selected_pei_ids: Optional[List[str]] = None,
 ) -> str:
     """Constrói contexto integrado usando apenas dados anonimizados (sem nomes reais) para envio à IA."""
@@ -1033,6 +1085,53 @@ def _build_anonymized_student_context(
             + json.dumps(anon_family_entries, ensure_ascii=False, indent=2)
         )
 
+    diary_summaries = _get_diary_summaries_for_student(student_id)
+    individual_summaries = _filter_diary_summaries_by_period(
+        [s for s in diary_summaries if _diary_summary_covers_type(s, 'escolar')],
+        diary_summary_individual_start_date, diary_summary_individual_end_date,
+    )
+    family_summaries = _filter_diary_summaries_by_period(
+        [s for s in diary_summaries if _diary_summary_covers_type(s, 'familiar')],
+        diary_summary_family_start_date, diary_summary_family_end_date,
+    )
+
+    if source_selection.get('diary_summary_individual') and individual_summaries:
+        # Resumos salvos vêm com nomes reais (feitos pra leitura humana) — redige antes de mandar à IA.
+        has_explicit_period = bool(diary_summary_individual_start_date or diary_summary_individual_end_date)
+        redact_map = _collect_deanonymization_map(student_record, school_record, linked_teacher_records)
+        anon_summaries = [
+            {
+                'period_start': s.get('period_start', ''),
+                'period_end': s.get('period_end', ''),
+                'summary': _anonymize_known_names(s.get('summary_text', ''), redact_map),
+            }
+            for s in individual_summaries
+        ]
+        sections.append(
+            ('Resumos salvos do Diário Escolar (Resumo Diário Individual, período selecionado pelo usuário, JSON anonimizado):\n'
+             if has_explicit_period else
+             'Resumos salvos do Diário Escolar (Resumo Diário Individual, JSON anonimizado):\n')
+            + json.dumps(anon_summaries, ensure_ascii=False, indent=2)
+        )
+
+    if source_selection.get('diary_summary_family') and family_summaries:
+        has_explicit_period = bool(diary_summary_family_start_date or diary_summary_family_end_date)
+        redact_map = _collect_deanonymization_map(student_record, school_record, linked_teacher_records)
+        anon_summaries = [
+            {
+                'period_start': s.get('period_start', ''),
+                'period_end': s.get('period_end', ''),
+                'summary': _anonymize_known_names(s.get('summary_text', ''), redact_map),
+            }
+            for s in family_summaries
+        ]
+        sections.append(
+            ('Resumos salvos do Diário Familiar (Resumo Diário Familiar, período selecionado pelo usuário, JSON anonimizado):\n'
+             if has_explicit_period else
+             'Resumos salvos do Diário Familiar (Resumo Diário Familiar, JSON anonimizado):\n')
+            + json.dumps(anon_summaries, ensure_ascii=False, indent=2)
+        )
+
     pdi = _get_pdi_for_student(canonical_student_name, student_id=student_id)
 
     if source_selection.get('pdi') and pdi:
@@ -1091,6 +1190,10 @@ def get_pei_sources_preview():
     diary_end_date = request.args.get('diary_end_date', '').strip()
     family_diary_start_date = request.args.get('family_diary_start_date', '').strip()
     family_diary_end_date = request.args.get('family_diary_end_date', '').strip()
+    diary_summary_individual_start_date = request.args.get('diary_summary_individual_start_date', '').strip()
+    diary_summary_individual_end_date = request.args.get('diary_summary_individual_end_date', '').strip()
+    diary_summary_family_start_date = request.args.get('diary_summary_family_start_date', '').strip()
+    diary_summary_family_end_date = request.args.get('diary_summary_family_end_date', '').strip()
 
     student = None
     if student_id:
@@ -1131,11 +1234,12 @@ def get_pei_sources_preview():
     # As buscas abaixo são independentes entre si (aluno/escola já resolvidos) —
     # rodar em paralelo evita que cada uma espere a anterior terminar, já que a
     # maior parte do tempo é rede/IO (Postgres, ChromaDB), não CPU.
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    with ThreadPoolExecutor(max_workers=7) as executor:
         school_future = executor.submit(_get_school_record, school_id) if school_id else None
         teacher_futures = [executor.submit(_get_teacher_record, tid) for tid in teacher_ids]
         diary_future = executor.submit(_get_diary_entries_for_student, student_name, student_id=student_id)
         family_diary_future = executor.submit(_get_family_diary_entries_for_student, student_id)
+        diary_summaries_future = executor.submit(_get_diary_summaries_for_student, student_id)
         pdi_future = executor.submit(_get_pdi_for_student, student_name, student_id=student_id)
         peis_future = executor.submit(_list_linked_peis, student_name, student_id=student_id, school=school)
         docs_future = executor.submit(_summarize_vector_documents_for_student, engine, student_name, school)
@@ -1144,6 +1248,7 @@ def get_pei_sources_preview():
         teacher_records = [f.result() for f in teacher_futures if f.result()]
         diary_entries_all = diary_future.result()
         family_diary_entries_all = family_diary_future.result()
+        diary_summaries = diary_summaries_future.result()
         pdi = pdi_future.result()
         linked_peis = peis_future.result()
         docs_summary = docs_future.result()
@@ -1151,6 +1256,14 @@ def get_pei_sources_preview():
     diary_entries = _filter_diary_entries_by_date(diary_entries_all, diary_start_date, diary_end_date)
     family_diary_entries = _filter_diary_entries_by_date(
         family_diary_entries_all, family_diary_start_date, family_diary_end_date, date_key='entry_date'
+    )
+    individual_summaries = _filter_diary_summaries_by_period(
+        [s for s in diary_summaries if _diary_summary_covers_type(s, 'escolar')],
+        diary_summary_individual_start_date, diary_summary_individual_end_date,
+    )
+    family_summaries = _filter_diary_summaries_by_period(
+        [s for s in diary_summaries if _diary_summary_covers_type(s, 'familiar')],
+        diary_summary_family_start_date, diary_summary_family_end_date,
     )
 
     return jsonify({
@@ -1226,6 +1339,34 @@ def get_pei_sources_preview():
                     for item in linked_peis
                 ],
                 "excerpt": _truncate_excerpt((((_get_pei_repo() or _pei_storage).get(linked_peis[0].get('id')) or linked_peis[0]).get('markdown') or ''), max_length=600) if linked_peis else '',
+            },
+            "diary_summary_individual": {
+                "included": len(individual_summaries) > 0,
+                "count": len(individual_summaries),
+                "summaries": [
+                    {
+                        "id": item.get('id'),
+                        "period_start": item.get('period_start'),
+                        "period_end": item.get('period_end'),
+                        "excerpt": _truncate_excerpt(item.get('summary_text') or '', max_length=400),
+                    }
+                    for item in individual_summaries
+                ],
+                "excerpt": _truncate_excerpt(individual_summaries[0].get('summary_text') or '', max_length=400) if individual_summaries else '',
+            },
+            "diary_summary_family": {
+                "included": len(family_summaries) > 0,
+                "count": len(family_summaries),
+                "summaries": [
+                    {
+                        "id": item.get('id'),
+                        "period_start": item.get('period_start'),
+                        "period_end": item.get('period_end'),
+                        "excerpt": _truncate_excerpt(item.get('summary_text') or '', max_length=400),
+                    }
+                    for item in family_summaries
+                ],
+                "excerpt": _truncate_excerpt(family_summaries[0].get('summary_text') or '', max_length=400) if family_summaries else '',
             },
         },
     })
@@ -1789,6 +1930,13 @@ def _can_edit_learning_records(role: str) -> bool:
 
 def _can_create_family_diary_entry(role: str) -> bool:
     return role in PAIS_ROLES
+
+
+DIARY_SUMMARY_ROLES = {'admin', 'professor', 'pais'}
+
+
+def _can_access_diary_summary(role: str) -> bool:
+    return role in DIARY_SUMMARY_ROLES
 
 
 def _family_diary_repo():
@@ -3027,6 +3175,9 @@ def get_student_entries(student_name):
 
     try:
         student_id = (request.args.get('student_id') or '').strip()
+        start_date = (request.args.get('start_date') or '').strip() or None
+        end_date = (request.args.get('end_date') or '').strip() or None
+
         if student_id:
             student = _get_student_record(student_id)
             if not student:
@@ -3036,14 +3187,29 @@ def get_student_entries(student_name):
         elif not _student_name_visible_to_user(student_name):
             return _scope_forbidden()
 
-        entries = _read_with_optional_fallback('diary', _diary_storage, 'get_entries_by_student', student_name)
+        entries = _read_with_optional_fallback(
+            'diary', _diary_storage, 'get_entries_by_student', student_name,
+            student_id=student_id or None,
+            start_date=start_date,
+            end_date=end_date,
+        )
         visible_entries = [entry for entry in entries if _entry_visible_to_user(entry)]
 
         images_by_entry = _diary_images_by_entry()
         for entry in visible_entries:
             entry['images'] = images_by_entry.get(str(entry.get('id') or ''), [])
 
-        return jsonify(visible_entries)
+        # Total sem filtro de data (para exibir "X de Y" no frontend)
+        total = None
+        if _is_postgres_mode() and (start_date or end_date):
+            try:
+                total = _postgres_repositories['diary'].count_entries_by_student(
+                    student_name, student_id=student_id or None
+                )
+            except Exception:
+                total = None
+
+        return jsonify({'entries': visible_entries, 'total': total})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -3984,6 +4150,299 @@ def delete_family_diary_image(image_id):
     _object_storage.delete_file(DIARY_IMAGES_BUCKET, object_key)
     _delete_object_metadata(FAMILY_DIARY_IMAGE_DOC_TYPE, image_id)
     return jsonify({"message": "Imagem removida com sucesso"})
+
+
+def _build_diary_summary_context(student: Dict, entry_refs: List[Dict]) -> str:
+    """Monta o bloco de texto anonimizado com as entradas (escolares e/ou familiares)
+    selecionadas pelo usuário, pra virar parte do system prompt do chat de Resumo Diário.
+
+    Refaz a busca das entradas a partir do student_id (não confia no texto vindo do
+    cliente) e filtra pelos ids recebidos — defesa em profundidade."""
+    student_id = student.get('id') or ''
+    school_id = (student.get('school_id') or '').strip()
+    school = _get_school_record(school_id) if school_id else None
+    teachers = []
+    for tid in (student.get('teacher_ids') or []):
+        t = _get_teacher_record(tid)
+        if t:
+            teachers.append(t)
+    redact_map = _collect_deanonymization_map(student, school, teachers)
+
+    school_ids = {str(ref.get('id') or '') for ref in entry_refs if ref.get('type') == 'escolar'}
+    family_ids = {str(ref.get('id') or '') for ref in entry_refs if ref.get('type') == 'familiar'}
+
+    blocks = []
+
+    if school_ids:
+        all_entries = _get_diary_entries_for_student(student.get('name') or '', student_id=student_id)
+        selected = [e for e in all_entries if str(e.get('id') or '') in school_ids]
+        anon_entries = [dict(e.get('anonymized_data') or {}) for e in selected]
+        if anon_entries:
+            blocks.append(
+                'Entradas do Diário Escolar selecionadas (JSON anonimizado):\n'
+                + json.dumps(anon_entries, ensure_ascii=False, indent=2)
+            )
+
+    if family_ids:
+        all_family_entries = _get_family_diary_entries_for_student(student_id)
+        selected = [e for e in all_family_entries if str(e.get('id') or '') in family_ids]
+        anon_family_entries = [
+            {
+                'entry_date': e.get('entry_date', ''),
+                'observations': _anonymize_known_names(e.get('observations', ''), redact_map),
+            }
+            for e in selected
+        ]
+        if anon_family_entries:
+            blocks.append(
+                'Entradas do Diário Familiar selecionadas (JSON anonimizado):\n'
+                + json.dumps(anon_family_entries, ensure_ascii=False, indent=2)
+            )
+
+    return '\n\n'.join(blocks)
+
+
+@app.route('/api/diary-summary/students', methods=['GET'])
+def list_diary_summary_students():
+    """Lista alunos (no escopo do usuário) com entradas de diário (escolar e/ou familiar)
+    no período informado — usado pra popular o seletor de aluno do Resumo Diário."""
+    role = _current_role()
+    if not _can_access_diary_summary(role):
+        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+
+    diary_repo = _postgres_repositories.get('diary') if _postgres_repositories else None
+    family_repo = _family_diary_repo()
+    if not diary_repo or not family_repo:
+        return jsonify({"error": "Resumo Diário indisponível"}), 503
+
+    start_date = (request.args.get('start_date') or '').strip()
+    end_date = (request.args.get('end_date') or '').strip()
+
+    visible_students = _filter_students_by_scope(_list_student_summaries())
+    student_ids = [s.get('id') for s in visible_students if s.get('id')]
+
+    school_counts = diary_repo.count_entries_by_student_in_range(student_ids, start_date, end_date)
+    family_counts = family_repo.count_entries_by_student_in_range(student_ids, start_date, end_date)
+
+    results = []
+    for student in visible_students:
+        sid = student.get('id') or ''
+        school_count = school_counts.get(sid, 0)
+        family_count = family_counts.get(sid, 0)
+        if school_count == 0 and family_count == 0:
+            continue
+        results.append({
+            'id': sid,
+            'name': student.get('name', ''),
+            'school_name': student.get('school_name', ''),
+            'school_entries_count': school_count,
+            'family_entries_count': family_count,
+        })
+
+    results.sort(key=lambda x: x['name'].lower())
+    return jsonify(results)
+
+
+@app.route('/api/diary-summary/entries', methods=['GET'])
+def list_diary_summary_entries():
+    """Lista entradas (escolares e familiares) de um aluno num período, pra seleção via
+    checkbox antes de montar o contexto do chat."""
+    role = _current_role()
+    if not _can_access_diary_summary(role):
+        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+
+    student_id = (request.args.get('student_id') or '').strip()
+    start_date = (request.args.get('start_date') or '').strip()
+    end_date = (request.args.get('end_date') or '').strip()
+
+    if not student_id:
+        return jsonify({"error": "Selecione um aluno"}), 400
+
+    student = _get_student_record(student_id)
+    if not student or not _student_visible_to_user(student):
+        return _scope_forbidden('Sem acesso a este aluno')
+
+    school_entries = _get_diary_entries_for_student(student.get('name') or '', student_id=student_id)
+    school_entries = _filter_diary_entries_by_date(school_entries, start_date, end_date)
+
+    family_entries = _get_family_diary_entries_for_student(student_id)
+    family_entries = _filter_diary_entries_by_date(family_entries, start_date, end_date, date_key='entry_date')
+
+    results = []
+    for entry in school_entries:
+        results.append({
+            'type': 'escolar',
+            'id': entry.get('id'),
+            'date': entry.get('diary_date', ''),
+            'preview': (entry.get('open_obs') or '').strip()[:160] or 'Sem observações abertas',
+            'author_name': ', '.join(entry.get('teachers') or []) or '—',
+        })
+    for entry in family_entries:
+        results.append({
+            'type': 'familiar',
+            'id': entry.get('id'),
+            'date': entry.get('entry_date', ''),
+            'preview': (entry.get('observations') or '').strip()[:160] or 'Sem observações',
+            'author_name': entry.get('author_name') or '—',
+        })
+
+    results.sort(key=lambda x: x.get('date', ''), reverse=True)
+    return jsonify(results)
+
+
+@app.route('/api/diary-summary/chat', methods=['POST'])
+def diary_summary_chat():
+    """Chat direto (sem RAG/busca vetorial) usando as entradas selecionadas pelo usuário
+    como contexto do system prompt — usado pra gerar resumos de período."""
+    role = _current_role()
+    if not _can_access_diary_summary(role):
+        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+
+    engine = get_rag_engine()
+    if engine is None:
+        return jsonify({"error": "GOOGLE_API_KEY não configurada no .env"}), 503
+
+    data = request.json or {}
+    student_id = (data.get('student_id') or '').strip()
+    session_id = (data.get('session_id') or '').strip()
+    instruction_prompt = (data.get('instruction_prompt') or '').strip()
+    message = (data.get('message') or '').strip()
+    entry_refs = data.get('entry_ids') or []
+    if not isinstance(entry_refs, list):
+        entry_refs = []
+
+    if not student_id:
+        return jsonify({"error": "Selecione um aluno"}), 400
+    if not session_id:
+        return jsonify({"error": "session_id ausente"}), 400
+    if not instruction_prompt:
+        return jsonify({"error": "Defina o prompt de instrução"}), 400
+    if not message:
+        return jsonify({"error": "Escreva uma mensagem"}), 400
+
+    student = _get_student_record(student_id)
+    if not student or not _student_visible_to_user(student):
+        return _scope_forbidden('Sem acesso a este aluno')
+
+    context_block = _build_diary_summary_context(student, entry_refs)
+    name_map = _name_map_for_student(student_id)
+
+    system_prompt = (
+        f"{instruction_prompt}\n\n"
+        "--- ENTRADAS SELECIONADAS PELO USUÁRIO (dados anonimizados) ---\n\n"
+        f"{context_block or '(nenhuma entrada selecionada)'}"
+    )
+
+    user = _current_user()
+    try:
+        result = engine.direct_chat(
+            message=message,
+            session_id=f"diary-summary::{session_id}",
+            system_prompt=system_prompt,
+            user_id=user.get('id'),
+            username=user.get('username'),
+        )
+    except Exception as e:
+        return jsonify({"error": f"Erro ao consultar IA: {e}"}), 500
+
+    response_text = _deanonymize_text(result.get('response') or '', name_map)
+    return jsonify({"response": response_text})
+
+
+@app.route('/api/diary-summary/summaries', methods=['POST'])
+def create_diary_summary():
+    """Salva um resumo gerado no chat, atrelado ao aluno e ao período selecionados."""
+    role = _current_role()
+    if not _can_access_diary_summary(role):
+        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+
+    repo = _postgres_repositories.get('diary_summary') if _postgres_repositories else None
+    if not repo:
+        return jsonify({"error": "Resumo Diário indisponível"}), 503
+
+    data = request.json or {}
+    student_id = (data.get('student_id') or '').strip()
+    period_start = (data.get('period_start') or '').strip()
+    period_end = (data.get('period_end') or '').strip()
+    summary_text = (data.get('summary_text') or '').strip()
+    source_entries = data.get('source_entries') or []
+    if not isinstance(source_entries, list):
+        source_entries = []
+
+    if not student_id:
+        return jsonify({"error": "Selecione um aluno"}), 400
+    if not summary_text:
+        return jsonify({"error": "Resumo vazio"}), 400
+
+    student = _get_student_record(student_id)
+    if not student or not _student_visible_to_user(student):
+        return _scope_forbidden('Sem acesso a este aluno')
+
+    user = _current_user()
+    summary = repo.create_summary(
+        student_id=student_id,
+        author_user_id=user.get('id') or '',
+        author_name=user.get('name') or user.get('username') or '',
+        period_start=period_start,
+        period_end=period_end,
+        summary_text=summary_text,
+        source_entries=source_entries,
+    )
+    return jsonify({"message": "Resumo salvo com sucesso", "summary": summary}), 201
+
+
+@app.route('/api/diary-summary/summaries', methods=['GET'])
+def list_diary_summaries():
+    """Lista resumos salvos de um aluno — visível pra quem tem acesso ao aluno
+    (mesmo escopo do Diário Familiar), não só quem gerou."""
+    role = _current_role()
+    if not _can_access_diary_summary(role):
+        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+
+    repo = _postgres_repositories.get('diary_summary') if _postgres_repositories else None
+    if not repo:
+        return jsonify({"error": "Resumo Diário indisponível"}), 503
+
+    student_id = (request.args.get('student_id') or '').strip()
+    if not student_id:
+        return jsonify({"error": "Selecione um aluno"}), 400
+
+    student = _get_student_record(student_id)
+    if not student or not _student_visible_to_user(student):
+        return _scope_forbidden('Sem acesso a este aluno')
+
+    return jsonify(repo.get_summaries_by_student(student_id))
+
+
+@app.route('/api/diary-summary/summaries/<summary_id>', methods=['DELETE'])
+def delete_diary_summary(summary_id):
+    """Remove um resumo salvo. Somente quem criou ou admin."""
+    role = _current_role()
+    if not _can_access_diary_summary(role):
+        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+
+    repo = _postgres_repositories.get('diary_summary') if _postgres_repositories else None
+    if not repo:
+        return jsonify({"error": "Resumo Diário indisponível"}), 503
+
+    summary = repo.get_summary(summary_id)
+    if not summary or summary.get('is_deleted'):
+        return jsonify({"error": "Resumo não encontrado"}), 404
+
+    student = _get_student_record(summary.get('student_id'))
+    if not student or not _student_visible_to_user(student):
+        return _scope_forbidden()
+
+    user = _current_user()
+    is_author = summary.get('author_user_id') == (user.get('id') or '')
+    if role not in ADMIN_ROLES and not is_author:
+        return _scope_forbidden('Somente quem criou o resumo ou admin pode removê-lo')
+
+    actor = user.get('username') or user.get('id') or ''
+    deleted = repo.delete_summary(summary_id, deleted_by=actor)
+    if deleted:
+        return jsonify({"message": "Resumo removido com sucesso"})
+    return jsonify({"error": "Resumo não encontrado"}), 404
 
 
 @app.route('/api/diary/last-teachers/<student_name>', methods=['GET'])
@@ -5601,6 +6060,10 @@ def rag_chat():
                 diary_end_date=(data.get('diary_end_date') or '').strip(),
                 family_diary_start_date=(data.get('family_diary_start_date') or '').strip(),
                 family_diary_end_date=(data.get('family_diary_end_date') or '').strip(),
+                diary_summary_individual_start_date=(data.get('diary_summary_individual_start_date') or '').strip(),
+                diary_summary_individual_end_date=(data.get('diary_summary_individual_end_date') or '').strip(),
+                diary_summary_family_start_date=(data.get('diary_summary_family_start_date') or '').strip(),
+                diary_summary_family_end_date=(data.get('diary_summary_family_end_date') or '').strip(),
                 selected_pei_ids=data.get('selected_pei_ids'),
             )
             _chat_student = _get_student_record(student_id) if student_id else None
@@ -5987,6 +6450,10 @@ def generate_pei():
             diary_end_date=(data.get('diary_end_date') or '').strip(),
             family_diary_start_date=(data.get('family_diary_start_date') or '').strip(),
             family_diary_end_date=(data.get('family_diary_end_date') or '').strip(),
+            diary_summary_individual_start_date=(data.get('diary_summary_individual_start_date') or '').strip(),
+            diary_summary_individual_end_date=(data.get('diary_summary_individual_end_date') or '').strip(),
+            diary_summary_family_start_date=(data.get('diary_summary_family_start_date') or '').strip(),
+            diary_summary_family_end_date=(data.get('diary_summary_family_end_date') or '').strip(),
             selected_pei_ids=data.get('selected_pei_ids'),
         )
 
@@ -6238,16 +6705,52 @@ def reset_chat_prompt():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/rag/diary-summary-prompt', methods=['GET'])
+def get_diary_summary_prompt():
+    """Retorna o prompt de instrução atual usado no Resumo Diário."""
+    if not _can_access_diary_summary(_current_role()):
+        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+    try:
+        return jsonify(_prompt_storage.get_diary_summary_prompt())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/diary-summary-prompt/reset', methods=['POST'])
+def reset_diary_summary_prompt():
+    """Restaura o prompt do Resumo Diário para o prompt base salvo."""
+    if not _can_access_diary_summary(_current_role()):
+        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+    try:
+        restored = _prompt_storage.reset_diary_summary_prompt_to_base()
+        return jsonify(restored)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ---------------------------------------------------------------------------
 # Catálogo de prompts (CRUD + ativar)
 # ---------------------------------------------------------------------------
 
+PROMPT_SCOPES = ('pei', 'chat', 'diary_summary')
+
+
+def _can_manage_prompt_scope(scope: str, role: str) -> bool:
+    """PEI/Chat continuam admin-only; Resumo Diário é aberto a quem já acessa a página
+    (admin/professor/pais) — prompts próprios de uma feature menos sensível que o resto."""
+    if scope == 'diary_summary':
+        return _can_access_diary_summary(role)
+    return role in ADMIN_ROLES
+
+
 @app.route('/api/rag/prompts', methods=['GET'])
 def list_prompts():
-    """Lista prompts de um escopo (pei ou chat)."""
+    """Lista prompts de um escopo (pei, chat ou diary_summary)."""
     scope = (request.args.get('scope') or '').strip().lower()
-    if scope not in ('pei', 'chat'):
-        return jsonify({"error": "Parâmetro scope é obrigatório (pei ou chat)"}), 400
+    if scope not in PROMPT_SCOPES:
+        return jsonify({"error": "Parâmetro scope é obrigatório (pei, chat ou diary_summary)"}), 400
+    if scope == 'diary_summary' and not _can_access_diary_summary(_current_role()):
+        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
     try:
         prompts = _prompt_storage.list_prompts(scope)
         return jsonify(prompts)
@@ -6258,16 +6761,16 @@ def list_prompts():
 @app.route('/api/rag/prompts', methods=['POST'])
 def create_prompt():
     """Cria um novo prompt no catálogo."""
-    if _current_role() not in ADMIN_ROLES:
-        return _scope_forbidden('Somente admins podem gerenciar prompts')
     data = request.json or {}
     scope = (data.get('scope') or '').strip().lower()
     name = (data.get('name') or '').strip()
     description = (data.get('description') or '').strip()
     content = (data.get('content') or '').strip()
     activate = bool(data.get('activate', False))
-    if scope not in ('pei', 'chat'):
-        return jsonify({"error": "scope deve ser pei ou chat"}), 400
+    if scope not in PROMPT_SCOPES:
+        return jsonify({"error": "scope deve ser pei, chat ou diary_summary"}), 400
+    if not _can_manage_prompt_scope(scope, _current_role()):
+        return _scope_forbidden('Perfil sem permissão para gerenciar prompts deste escopo')
     if not content:
         return jsonify({"error": "Conteúdo do prompt é obrigatório"}), 400
     try:
@@ -6280,13 +6783,16 @@ def create_prompt():
 @app.route('/api/rag/prompts/<prompt_id>', methods=['PUT'])
 def update_prompt(prompt_id):
     """Atualiza um prompt existente."""
-    if _current_role() not in ADMIN_ROLES:
-        return _scope_forbidden('Somente admins podem gerenciar prompts')
+    existing = _prompt_storage.get_prompt(prompt_id)
+    if not existing:
+        return jsonify({"error": "Prompt não encontrado"}), 404
+    if not _can_manage_prompt_scope(existing.get('scope'), _current_role()):
+        return _scope_forbidden('Perfil sem permissão para gerenciar prompts deste escopo')
     data = request.json or {}
     try:
         prompt = _prompt_storage.update_prompt(
             prompt_id,
-            scope=data.get('scope'),
+            scope=existing.get('scope'),
             name=data.get('name'),
             description=data.get('description'),
             content=data.get('content'),
@@ -6302,8 +6808,11 @@ def update_prompt(prompt_id):
 @app.route('/api/rag/prompts/<prompt_id>', methods=['DELETE'])
 def delete_prompt(prompt_id):
     """Remove um prompt do catálogo (não remove o prompt base)."""
-    if _current_role() not in ADMIN_ROLES:
-        return _scope_forbidden('Somente admins podem gerenciar prompts')
+    existing = _prompt_storage.get_prompt(prompt_id)
+    if not existing:
+        return jsonify({"error": "Prompt não encontrado"}), 404
+    if not _can_manage_prompt_scope(existing.get('scope'), _current_role()):
+        return _scope_forbidden('Perfil sem permissão para gerenciar prompts deste escopo')
     try:
         deleted = _prompt_storage.delete_prompt(prompt_id)
         return jsonify({"message": "Prompt removido", "prompt": deleted})
@@ -6316,8 +6825,11 @@ def delete_prompt(prompt_id):
 @app.route('/api/rag/prompts/<prompt_id>/activate', methods=['POST'])
 def activate_prompt(prompt_id):
     """Ativa um prompt do catálogo."""
-    if _current_role() not in ADMIN_ROLES:
-        return _scope_forbidden('Somente admins podem gerenciar prompts')
+    existing = _prompt_storage.get_prompt(prompt_id)
+    if not existing:
+        return jsonify({"error": "Prompt não encontrado"}), 404
+    if not _can_manage_prompt_scope(existing.get('scope'), _current_role()):
+        return _scope_forbidden('Perfil sem permissão para gerenciar prompts deste escopo')
     try:
         prompt = _prompt_storage.activate_prompt(prompt_id)
         return jsonify(prompt)

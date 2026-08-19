@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 from sqlalchemy import (
     Boolean, JSON, ForeignKey, Integer, String, Text,
-    UniqueConstraint, create_engine, delete, select, text, update,
+    UniqueConstraint, create_engine, delete, func, select, text, update,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -221,6 +221,39 @@ class FamilyDiaryEntryRecord(Base):
     observations: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     updated_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # Soft delete
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='false')
+    deleted_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    deleted_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class DiarySummaryRecord(Base):
+    """
+    Resumo de período gerado por IA a partir de entradas do diário escolar e/ou familiar,
+    salvo pelo usuário. FKs: student_id → students.id (CASCADE), author_user_id → user_profiles.id (CASCADE)
+    """
+    __tablename__ = 'diary_summaries'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    student_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey('students.id', ondelete='CASCADE', name='fk_ds_student'),
+        nullable=False,
+        index=True,
+    )
+    author_user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey('user_profiles.id', ondelete='CASCADE', name='fk_ds_author'),
+        nullable=False,
+        index=True,
+    )
+    author_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    period_start: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    period_end: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    summary_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Lista de entradas-fonte: [{"type": "escolar"|"familiar", "id": "...", "date": "..."}]
+    source_entries: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     # Soft delete
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='false')
     deleted_at: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
@@ -1943,27 +1976,81 @@ class DiaryPostgresRepository(_BaseRepository):
             ).scalars().all()
         return [self._to_entity(row) for row in rows]
 
-    def get_entries_by_student(self, student_name: str, student_id: Optional[str] = None) -> List[Dict]:
+    def count_entries_by_student_in_range(
+        self, student_ids: List[str], start_date: str = '', end_date: str = ''
+    ) -> Dict[str, int]:
+        """Conta entradas por student_id num período, numa única query (evita N+1)."""
+        if not student_ids:
+            return {}
+        with self._session() as session:
+            stmt = select(DiaryEntryRecord.student_id, func.count(DiaryEntryRecord.id)).where(
+                DiaryEntryRecord.student_id.in_(student_ids),
+                DiaryEntryRecord.is_deleted == False,  # noqa: E712
+            )
+            if start_date:
+                stmt = stmt.where(DiaryEntryRecord.diary_date >= start_date)
+            if end_date:
+                stmt = stmt.where(DiaryEntryRecord.diary_date <= end_date)
+            stmt = stmt.group_by(DiaryEntryRecord.student_id)
+            rows = session.execute(stmt).all()
+        return {row[0]: row[1] for row in rows if row[0]}
+
+    def get_entries_by_student(
+        self,
+        student_name: str,
+        student_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[Dict]:
         with self._session() as session:
             if student_id:
                 # Caminho rápido: usa o índice da coluna FK student_id
+                conditions = [
+                    DiaryEntryRecord.student_id == student_id,
+                    DiaryEntryRecord.is_deleted == False,  # noqa: E712
+                ]
+                if start_date:
+                    conditions.append(DiaryEntryRecord.diary_date >= start_date)
+                if end_date:
+                    conditions.append(DiaryEntryRecord.diary_date <= end_date)
                 rows = session.execute(
-                    select(DiaryEntryRecord).where(
-                        DiaryEntryRecord.student_id == student_id,
-                        DiaryEntryRecord.is_deleted == False,  # noqa: E712
-                    )
+                    select(DiaryEntryRecord).where(*conditions)
                 ).scalars().all()
                 entries = [self._to_entity(row) for row in rows]
             else:
                 # Fallback por nome: full scan (student_id não disponível)
+                conditions = [DiaryEntryRecord.is_deleted == False]  # noqa: E712
+                if start_date:
+                    conditions.append(DiaryEntryRecord.diary_date >= start_date)
+                if end_date:
+                    conditions.append(DiaryEntryRecord.diary_date <= end_date)
                 rows = session.execute(
-                    select(DiaryEntryRecord).where(DiaryEntryRecord.is_deleted == False)  # noqa: E712
+                    select(DiaryEntryRecord).where(*conditions)
                 ).scalars().all()
                 entities = [self._to_entity(row) for row in rows]
                 entries = [e for e in entities
                            if self._entry_matches_student(e, None, student_name)]
 
         return sorted(entries, key=lambda x: x.get('diary_date', ''), reverse=True)
+
+    def count_entries_by_student(self, student_name: str, student_id: Optional[str] = None) -> int:
+        """Retorna o total de entradas não deletadas de um aluno, sem filtro de data."""
+        with self._session() as session:
+            if student_id:
+                result = session.execute(
+                    select(func.count()).select_from(DiaryEntryRecord).where(
+                        DiaryEntryRecord.student_id == student_id,
+                        DiaryEntryRecord.is_deleted == False,  # noqa: E712
+                    )
+                ).scalar()
+            else:
+                result = session.execute(
+                    select(func.count()).select_from(DiaryEntryRecord).where(
+                        DiaryEntryRecord.is_deleted == False,  # noqa: E712
+                        DiaryEntryRecord.student_name == student_name,
+                    )
+                ).scalar()
+            return int(result or 0)
 
     def has_date_conflict(self, student_id: Optional[str], student_name: str, diary_date: str) -> bool:
         if not diary_date:
@@ -2210,6 +2297,25 @@ class FamilyDiaryPostgresRepository(_BaseRepository):
             'deleted_by': record.deleted_by or '',
         }
 
+    def count_entries_by_student_in_range(
+        self, student_ids: List[str], start_date: str = '', end_date: str = ''
+    ) -> Dict[str, int]:
+        """Conta entradas por student_id num período, numa única query (evita N+1)."""
+        if not student_ids:
+            return {}
+        with self._session() as session:
+            stmt = select(FamilyDiaryEntryRecord.student_id, func.count(FamilyDiaryEntryRecord.id)).where(
+                FamilyDiaryEntryRecord.student_id.in_(student_ids),
+                FamilyDiaryEntryRecord.is_deleted == False,  # noqa: E712
+            )
+            if start_date:
+                stmt = stmt.where(FamilyDiaryEntryRecord.entry_date >= start_date)
+            if end_date:
+                stmt = stmt.where(FamilyDiaryEntryRecord.entry_date <= end_date)
+            stmt = stmt.group_by(FamilyDiaryEntryRecord.student_id)
+            rows = session.execute(stmt).all()
+        return {row[0]: row[1] for row in rows if row[0]}
+
     def create_entry(
         self,
         student_id: str,
@@ -2263,6 +2369,83 @@ class FamilyDiaryPostgresRepository(_BaseRepository):
     def delete_entry(self, entry_id: str, deleted_by: Optional[str] = None) -> bool:
         with self._session() as session:
             record = session.get(FamilyDiaryEntryRecord, entry_id)
+            if not record:
+                return False
+            record.is_deleted = True
+            record.deleted_at = now_brasilia_iso()
+            record.deleted_by = deleted_by or ''
+            return True
+
+
+# ---------------------------------------------------------------------------
+# Diary Summary  (Resumo Diário — resumos de IA salvos a partir de entradas do
+# diário escolar e/ou familiar; FK: student_id → students CASCADE,
+# author_user_id → user_profiles CASCADE)
+# ---------------------------------------------------------------------------
+
+class DiarySummaryPostgresRepository(_BaseRepository):
+    def __init__(self, session_factory):
+        super().__init__(session_factory, DiarySummaryRecord)
+
+    @staticmethod
+    def _to_entity(record: DiarySummaryRecord) -> Dict:
+        return {
+            'id': record.id,
+            'student_id': record.student_id or '',
+            'author_user_id': record.author_user_id or '',
+            'author_name': record.author_name or '',
+            'period_start': record.period_start or '',
+            'period_end': record.period_end or '',
+            'summary_text': record.summary_text or '',
+            'source_entries': list(record.source_entries or []),
+            'created_at': record.created_at,
+            'is_deleted': bool(record.is_deleted),
+        }
+
+    def create_summary(
+        self,
+        student_id: str,
+        author_user_id: str,
+        author_name: str,
+        period_start: str,
+        period_end: str,
+        summary_text: str,
+        source_entries: List[Dict],
+    ) -> Dict:
+        now = now_brasilia_iso()
+        with self._session() as session:
+            record = DiarySummaryRecord(
+                id=str(uuid.uuid4()),
+                student_id=student_id,
+                author_user_id=author_user_id,
+                author_name=author_name,
+                period_start=period_start,
+                period_end=period_end,
+                summary_text=summary_text,
+                source_entries=list(source_entries or []),
+                created_at=now,
+            )
+            session.add(record)
+            session.flush()
+            return self._to_entity(record)
+
+    def get_summaries_by_student(self, student_id: str) -> List[Dict]:
+        with self._session() as session:
+            rows = session.execute(
+                select(DiarySummaryRecord).where(
+                    DiarySummaryRecord.student_id == student_id,
+                    DiarySummaryRecord.is_deleted == False,  # noqa: E712
+                )
+            ).scalars().all()
+        summaries = [self._to_entity(row) for row in rows]
+        return sorted(summaries, key=lambda x: x.get('created_at', ''), reverse=True)
+
+    def get_summary(self, summary_id: str) -> Optional[Dict]:
+        return self._get(summary_id)
+
+    def delete_summary(self, summary_id: str, deleted_by: Optional[str] = None) -> bool:
+        with self._session() as session:
+            record = session.get(DiarySummaryRecord, summary_id)
             if not record:
                 return False
             record.is_deleted = True
@@ -3739,6 +3922,7 @@ def create_postgres_repositories(database_url: str):
         'teacher': TeacherPostgresRepository(session_factory),
         'diary': DiaryPostgresRepository(session_factory),
         'family_diary': FamilyDiaryPostgresRepository(session_factory),
+        'diary_summary': DiarySummaryPostgresRepository(session_factory),
         'pdi': PDIPostgresRepository(session_factory),
         'form_submission': FormSubmissionsPostgresRepository(session_factory),
         'object_metadata': ObjectStorageMetadataPostgresRepository(session_factory),

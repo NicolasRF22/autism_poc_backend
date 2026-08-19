@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import Boolean, String, Text, UniqueConstraint, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from prompts import SYSTEM_PROMPT_CHAT, SYSTEM_PROMPT_PEI
+from prompts import SYSTEM_PROMPT_CHAT, SYSTEM_PROMPT_DIARY_SUMMARY, SYSTEM_PROMPT_PEI
 from time_utils import now_brasilia_iso
 
 
@@ -39,6 +39,7 @@ class PromptStorage:
         self.database_url = (database_url or os.getenv('DATABASE_URL') or '').strip()
         self.pei_prompt_path = os.path.join(storage_dir, 'pei_prompt.json')
         self.chat_prompt_path = os.path.join(storage_dir, 'chat_prompt.json')
+        self.diary_summary_prompt_path = os.path.join(storage_dir, 'diary_summary_prompt.json')
         os.makedirs(storage_dir, exist_ok=True)
         self._engine = None
         self._session_factory = None
@@ -52,24 +53,35 @@ class PromptStorage:
         else:
             self._ensure_scope_file('pei')
             self._ensure_scope_file('chat')
+            self._ensure_scope_file('diary_summary')
 
     def _scope_default_content(self, scope: str) -> str:
         if scope == 'chat':
             return SYSTEM_PROMPT_CHAT
         if scope == 'pei':
             return SYSTEM_PROMPT_PEI
+        if scope == 'diary_summary':
+            return SYSTEM_PROMPT_DIARY_SUMMARY
         raise ValueError('Escopo inválido')
 
     def _scope_default_name(self, scope: str) -> str:
-        return 'Prompt base do Chat' if scope == 'chat' else 'Prompt base do PEI'
+        if scope == 'chat':
+            return 'Prompt base do Chat'
+        if scope == 'diary_summary':
+            return 'Prompt base do Resumo Diário'
+        return 'Prompt base do PEI'
 
     def _scope_path(self, scope: str) -> str:
         scope = self._normalize_scope(scope)
-        return self.chat_prompt_path if scope == 'chat' else self.pei_prompt_path
+        if scope == 'chat':
+            return self.chat_prompt_path
+        if scope == 'diary_summary':
+            return self.diary_summary_prompt_path
+        return self.pei_prompt_path
 
     def _normalize_scope(self, scope: str) -> str:
         normalized = (scope or '').strip().lower()
-        if normalized not in {'chat', 'pei'}:
+        if normalized not in {'chat', 'pei', 'diary_summary'}:
             raise ValueError('Escopo inválido')
         return normalized
 
@@ -306,7 +318,7 @@ class PromptStorage:
         self._scope_file_payload(scope)
 
     def _seed_database_defaults(self):
-        for scope in ('pei', 'chat'):
+        for scope in ('pei', 'chat', 'diary_summary'):
             self._ensure_database_scope(scope)
 
     def _ensure_database_scope(self, scope: str):
@@ -489,7 +501,7 @@ class PromptStorage:
             return None
         if self._use_database:
             return self._db_get_prompt(prompt_id)
-        for scope in ('chat', 'pei'):
+        for scope in ('chat', 'pei', 'diary_summary'):
             payload = self._scope_file_payload(scope)
             for prompt in payload.get('prompts') or []:
                 if prompt.get('id') == prompt_id:
@@ -535,7 +547,7 @@ class PromptStorage:
             raise ValueError('Prompt não encontrado')
         if self._use_database:
             return self._db_update_prompt(prompt_id, name, description, content, activate=activate)
-        for current_scope in ('chat', 'pei'):
+        for current_scope in ('chat', 'pei', 'diary_summary'):
             if scope and self._normalize_scope(scope) != current_scope:
                 continue
             payload = self._scope_file_payload(current_scope)
@@ -565,7 +577,7 @@ class PromptStorage:
             raise ValueError('Prompt não encontrado')
         if self._use_database:
             return self._db_delete_prompt(prompt_id)
-        for scope in ('chat', 'pei'):
+        for scope in ('chat', 'pei', 'diary_summary'):
             payload = self._scope_file_payload(scope)
             prompts = payload.get('prompts') or []
             target = next((item for item in prompts if item.get('id') == prompt_id), None)
@@ -594,7 +606,7 @@ class PromptStorage:
             if not prompt:
                 raise ValueError('Prompt não encontrado')
             return self._db_set_active_prompt(prompt['scope'], prompt_id)
-        for scope in ('chat', 'pei'):
+        for scope in ('chat', 'pei', 'diary_summary'):
             payload = self._scope_file_payload(scope)
             prompts = payload.get('prompts') or []
             target = next((item for item in prompts if item.get('id') == prompt_id), None)
@@ -656,3 +668,12 @@ class PromptStorage:
 
     def reset_chat_prompt_to_base(self) -> Dict:
         return self.reset_scope_prompt_to_base('chat')
+
+    def get_diary_summary_prompt(self) -> Dict:
+        return self.get_prompt_bundle('diary_summary')
+
+    def save_diary_summary_prompt(self, prompt: str) -> Dict:
+        return self.save_scope_prompt('diary_summary', prompt)
+
+    def reset_diary_summary_prompt_to_base(self) -> Dict:
+        return self.reset_scope_prompt_to_base('diary_summary')
