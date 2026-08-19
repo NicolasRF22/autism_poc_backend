@@ -1108,9 +1108,9 @@ def _build_anonymized_student_context(
             for s in individual_summaries
         ]
         sections.append(
-            ('Resumos salvos do Diário Escolar (Resumo Diário Individual, período selecionado pelo usuário, JSON anonimizado):\n'
+            ('Resumos salvos do Diário Escolar (Resumo Diário Escolar, período selecionado pelo usuário, JSON anonimizado):\n'
              if has_explicit_period else
-             'Resumos salvos do Diário Escolar (Resumo Diário Individual, JSON anonimizado):\n')
+             'Resumos salvos do Diário Escolar (Resumo Diário Escolar, JSON anonimizado):\n')
             + json.dumps(anon_summaries, ensure_ascii=False, indent=2)
         )
 
@@ -1932,11 +1932,19 @@ def _can_create_family_diary_entry(role: str) -> bool:
     return role in PAIS_ROLES
 
 
-DIARY_SUMMARY_ROLES = {'admin', 'professor', 'pais'}
+DIARY_SUMMARY_VIEW_ROLES = {'admin', 'coordenacao', 'professor', 'pais'}
+DIARY_SUMMARY_GENERATE_ROLES = {'admin'}
 
 
 def _can_access_diary_summary(role: str) -> bool:
-    return role in DIARY_SUMMARY_ROLES
+    """Acesso à página/aos resumos já prontos. Coordenação/professor/pais só visualizam."""
+    return role in DIARY_SUMMARY_VIEW_ROLES
+
+
+def _can_generate_diary_summary(role: str) -> bool:
+    """Acesso ao fluxo de geração (escolher período/aluno/entradas, conversar e salvar
+    um resumo novo, gerenciar o prompt de instrução). Só admin, por enquanto."""
+    return role in DIARY_SUMMARY_GENERATE_ROLES
 
 
 def _family_diary_repo():
@@ -4207,8 +4215,8 @@ def list_diary_summary_students():
     """Lista alunos (no escopo do usuário) com entradas de diário (escolar e/ou familiar)
     no período informado — usado pra popular o seletor de aluno do Resumo Diário."""
     role = _current_role()
-    if not _can_access_diary_summary(role):
-        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+    if not _can_generate_diary_summary(role):
+        return _scope_forbidden('Somente admin pode gerar resumos novos')
 
     diary_repo = _postgres_repositories.get('diary') if _postgres_repositories else None
     family_repo = _family_diary_repo()
@@ -4248,8 +4256,8 @@ def list_diary_summary_entries():
     """Lista entradas (escolares e familiares) de um aluno num período, pra seleção via
     checkbox antes de montar o contexto do chat."""
     role = _current_role()
-    if not _can_access_diary_summary(role):
-        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+    if not _can_generate_diary_summary(role):
+        return _scope_forbidden('Somente admin pode gerar resumos novos')
 
     student_id = (request.args.get('student_id') or '').strip()
     start_date = (request.args.get('start_date') or '').strip()
@@ -4295,8 +4303,8 @@ def diary_summary_chat():
     """Chat direto (sem RAG/busca vetorial) usando as entradas selecionadas pelo usuário
     como contexto do system prompt — usado pra gerar resumos de período."""
     role = _current_role()
-    if not _can_access_diary_summary(role):
-        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+    if not _can_generate_diary_summary(role):
+        return _scope_forbidden('Somente admin pode gerar resumos novos')
 
     engine = get_rag_engine()
     if engine is None:
@@ -4353,8 +4361,8 @@ def diary_summary_chat():
 def create_diary_summary():
     """Salva um resumo gerado no chat, atrelado ao aluno e ao período selecionados."""
     role = _current_role()
-    if not _can_access_diary_summary(role):
-        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+    if not _can_generate_diary_summary(role):
+        return _scope_forbidden('Somente admin pode gerar resumos novos')
 
     repo = _postgres_repositories.get('diary_summary') if _postgres_repositories else None
     if not repo:
@@ -6708,8 +6716,8 @@ def reset_chat_prompt():
 @app.route('/api/rag/diary-summary-prompt', methods=['GET'])
 def get_diary_summary_prompt():
     """Retorna o prompt de instrução atual usado no Resumo Diário."""
-    if not _can_access_diary_summary(_current_role()):
-        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+    if not _can_generate_diary_summary(_current_role()):
+        return _scope_forbidden('Somente admin pode gerenciar o prompt do Resumo Diário')
     try:
         return jsonify(_prompt_storage.get_diary_summary_prompt())
     except Exception as e:
@@ -6719,8 +6727,8 @@ def get_diary_summary_prompt():
 @app.route('/api/rag/diary-summary-prompt/reset', methods=['POST'])
 def reset_diary_summary_prompt():
     """Restaura o prompt do Resumo Diário para o prompt base salvo."""
-    if not _can_access_diary_summary(_current_role()):
-        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+    if not _can_generate_diary_summary(_current_role()):
+        return _scope_forbidden('Somente admin pode gerenciar o prompt do Resumo Diário')
     try:
         restored = _prompt_storage.reset_diary_summary_prompt_to_base()
         return jsonify(restored)
@@ -6736,10 +6744,10 @@ PROMPT_SCOPES = ('pei', 'chat', 'diary_summary')
 
 
 def _can_manage_prompt_scope(scope: str, role: str) -> bool:
-    """PEI/Chat continuam admin-only; Resumo Diário é aberto a quem já acessa a página
-    (admin/professor/pais) — prompts próprios de uma feature menos sensível que o resto."""
+    """PEI/Chat continuam admin-only; Resumo Diário também — só quem gera resumos novos
+    usa um prompt de instrução (coordenação/professor/pais só veem os resumos prontos)."""
     if scope == 'diary_summary':
-        return _can_access_diary_summary(role)
+        return _can_generate_diary_summary(role)
     return role in ADMIN_ROLES
 
 
@@ -6749,8 +6757,8 @@ def list_prompts():
     scope = (request.args.get('scope') or '').strip().lower()
     if scope not in PROMPT_SCOPES:
         return jsonify({"error": "Parâmetro scope é obrigatório (pei, chat ou diary_summary)"}), 400
-    if scope == 'diary_summary' and not _can_access_diary_summary(_current_role()):
-        return _scope_forbidden('Perfil sem acesso ao Resumo Diário')
+    if scope == 'diary_summary' and not _can_generate_diary_summary(_current_role()):
+        return _scope_forbidden('Somente admin pode gerenciar o prompt do Resumo Diário')
     try:
         prompts = _prompt_storage.list_prompts(scope)
         return jsonify(prompts)
