@@ -962,6 +962,59 @@ def _anonymize_known_names(text: str, name_map: Dict[str, str]) -> str:
     return text
 
 
+# Campos "estruturais" do cadastro básico do aluno/escola — o repositório guarda o
+# Estudo de Caso e o Cadastro da Escola como um dict "achatado" onde campo estrutural
+# (nome, idade, ids de vínculo etc.) e resposta de questionário ficam misturados no
+# mesmo nível (ver StudentPostgresRepository._student_entity / SchoolPostgresRepository
+# ._to_entity, em postgres_repositories.py). Tudo que sobrar depois de excluir essas
+# chaves é o conteúdo de verdade do questionário.
+_STUDENT_CASE_STUDY_EXCLUDED_FIELDS = {
+    'id', 'school_id', 'name', 'age', 'birth_date', 'class', 'grade', 'school_name',
+    'case_study_completed', 'teacher_ids', 'teacher_id', 'teacher_name', 'teacher_names',
+    'teachers', 'parent_ids', 'parent_names', 'anonymized_data', 'created_at', 'updated_at',
+    # Nome de professor digitado à mão no formulário — redundante (já anonimizado via
+    # UUID pela fonte "Pré-cadastro de Docente(s)") e não dá pra confiar em redação por
+    # string aqui, já que o texto pode não bater exatamente com o nome cadastrado.
+    'mainTeacher', 'supportTeacher',
+}
+
+_SCHOOL_REGISTRATION_EXCLUDED_FIELDS = {
+    'id', 'municipio_id', 'name', 'cnpj', 'institution_type', 'address', 'notes',
+    'school_registration_completed', 'anonymized_data', 'created_at', 'updated_at',
+}
+
+
+def _extract_form_answers(record: Dict, excluded_fields: set) -> Dict:
+    """Isola as respostas de questionário (Estudo de Caso / Cadastro da Escola) dentro
+    do dict "achatado" que o repositório devolve — remove campos estruturais e valores
+    vazios (pergunta não respondida)."""
+    return {
+        key: value
+        for key, value in (record or {}).items()
+        if key not in excluded_fields and value not in (None, '', [], {})
+    }
+
+
+def _anonymize_form_answers(answers: Dict, redact_map: Dict[str, str]) -> Dict:
+    """Aplica _anonymize_known_names em cada valor string de um dict de respostas de
+    formulário (defesa extra: cobre nomes reais digitados livremente em algum campo de
+    texto do Estudo de Caso/Cadastro da Escola, ex.: o próprio nome do aluno numa
+    observação). Não cobre nomes de terceiros não cadastrados no sistema (colegas,
+    responsáveis) — mesma limitação já documentada pra `_anonymize_known_names`."""
+    result = {}
+    for key, value in (answers or {}).items():
+        if isinstance(value, str):
+            result[key] = _anonymize_known_names(value, redact_map)
+        elif isinstance(value, list):
+            result[key] = [
+                _anonymize_known_names(v, redact_map) if isinstance(v, str) else v
+                for v in value
+            ]
+        else:
+            result[key] = value
+    return result
+
+
 def _name_map_for_student(student_id: str) -> Dict[str, str]:
     """Constrói mapa UUID→nome real para um aluno — reutilizável em qualquer endpoint."""
     student = _get_student_record(student_id) if student_id else None
@@ -1026,15 +1079,23 @@ def _build_anonymized_student_context(
 
     if source_selection.get('student_pre_registration') and student_record:
         anon = dict(student_record.get('anonymized_data') or {})
+        case_study_answers = _extract_form_answers(student_record, _STUDENT_CASE_STUDY_EXCLUDED_FIELDS)
+        if case_study_answers:
+            redact_map = _collect_deanonymization_map(student_record, school_record, linked_teacher_records)
+            anon['estudo_de_caso'] = _anonymize_form_answers(case_study_answers, redact_map)
         sections.append(
-            'Dados anonimizados do aluno (JSON):\n'
+            'Dados anonimizados do aluno + respostas do Estudo de Caso, se preenchido (JSON):\n'
             + json.dumps(anon, ensure_ascii=False, indent=2)
         )
 
     if source_selection.get('school_pre_registration') and school_record:
         anon = dict(school_record.get('anonymized_data') or {})
+        registration_answers = _extract_form_answers(school_record, _SCHOOL_REGISTRATION_EXCLUDED_FIELDS)
+        if registration_answers:
+            redact_map = _collect_deanonymization_map(student_record, school_record, linked_teacher_records)
+            anon['cadastro_da_escola'] = _anonymize_form_answers(registration_answers, redact_map)
         sections.append(
-            'Dados anonimizados da escola (JSON):\n'
+            'Dados anonimizados da escola + respostas do Cadastro da Escola, se preenchido (JSON):\n'
             + json.dumps(anon, ensure_ascii=False, indent=2)
         )
 
@@ -1272,6 +1333,7 @@ def get_pei_sources_preview():
         "sources": {
             "student_pre_registration": {
                 "included": bool(student),
+                "case_study_answers_count": len(_extract_form_answers(student or {}, _STUDENT_CASE_STUDY_EXCLUDED_FIELDS)),
             },
             "teachers_pre_registration": {
                 "included": len(teacher_records) > 0,
@@ -1287,6 +1349,7 @@ def get_pei_sources_preview():
             "school_pre_registration": {
                 "included": bool(school_record),
                 "school_name": school_record.get('name') if school_record else None,
+                "registration_answers_count": len(_extract_form_answers(school_record or {}, _SCHOOL_REGISTRATION_EXCLUDED_FIELDS)),
             },
             "vector_documents": {
                 "included": docs_summary['document_count'] > 0,
