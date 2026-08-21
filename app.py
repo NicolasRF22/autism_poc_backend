@@ -4334,9 +4334,27 @@ def diary_summary_chat():
 
     context_block = _build_diary_summary_context(student, entry_refs)
     name_map = _name_map_for_student(student_id)
+    school_id = (student.get('school_id') or '').strip()
 
+    # Regra de anonimização embutida no código (não no prompt editável pelo admin) —
+    # mesmo problema já resolvido pro PEI (ver SYSTEM_PROMPT_PEI em prompts.py): sem essa
+    # instrução explícita, o Gemini vê um UUID solto no JSON e, ao precisar escrever o
+    # nome do aluno/escola numa frase, inventa um placeholder tipo "[Nome da Aluna]" em vez
+    # de copiar o ID literalmente — aí a de-anonimização (_deanonymize_text) não acha o
+    # UUID na resposta pra substituir pelo nome real. Fica fora de `instruction_prompt`
+    # de propósito: como esse prompt é livremente editável pelo admin (é o objetivo da
+    # feature), colocar a regra aqui garante que ela nunca seja removida por engano.
     system_prompt = (
         f"{instruction_prompt}\n\n"
+        "DADOS DO ALUNO (ANONIMIZADOS) — regra obrigatória: os identificadores abaixo "
+        "substituem o nome real do aluno e da escola (limitação técnica do sistema, não "
+        "ausência de informação). Sempre que for se referir ao aluno ou à escola pelo nome "
+        "no resumo (ex.: \"Segue resumo da aluna ...\", \"da escola ...\"), copie o "
+        "identificador EXATAMENTE como fornecido abaixo, sem alterá-lo, sem tentar adivinhar "
+        "o nome real e sem usar um placeholder genérico como \"[Nome da Aluna]\" ou "
+        "\"[Nome da Escola]\":\n"
+        f"- ID do aluno: {student_id}\n"
+        f"- ID da escola: {school_id or '(não informado)'}\n\n"
         "--- ENTRADAS SELECIONADAS PELO USUÁRIO (dados anonimizados) ---\n\n"
         f"{context_block or '(nenhuma entrada selecionada)'}"
     )
@@ -6083,6 +6101,29 @@ def rag_chat():
                 if _t:
                     _chat_teachers.append(_t)
             _chat_name_map = _collect_deanonymization_map(_chat_student, _chat_school, _chat_teachers)
+
+            # Regra de anonimização embutida no código (não no prompt editável de Chat) —
+            # mesmo fix já aplicado no PEI e no Resumo Diário: sem instrução explícita pra
+            # copiar o ID literalmente, o Gemini inventa um placeholder tipo "[Nome do Aluno]"
+            # em vez do UUID, e a de-anonimização (_deanonymize_text) não acha o que
+            # substituir na resposta. Fica fora de `chat_prompt_data['prompt']` de propósito:
+            # como esse prompt é editável pelo admin, embutir no código garante que a regra
+            # nunca seja removida por um edit e não depende de sincronizar o banco.
+            if student_id:
+                _chat_anonymization_rule = (
+                    "DADOS DO ALUNO (ANONIMIZADOS) — regra obrigatória: os identificadores abaixo "
+                    "substituem o nome real do aluno e da escola (limitação técnica do sistema, não "
+                    "ausência de informação). Sempre que for se referir ao aluno ou à escola pelo nome "
+                    "na resposta, copie o identificador EXATAMENTE como fornecido abaixo, sem alterá-lo, "
+                    "sem tentar adivinhar o nome real e sem usar um placeholder genérico como "
+                    "\"[Nome do Aluno]\" ou \"[Nome da Escola]\":\n"
+                    f"- ID do aluno: {student_id}\n"
+                    f"- ID da escola: {_chat_school_id or '(não informado)'}"
+                )
+                integrated_context = (
+                    f"{_chat_anonymization_rule}\n\n---\n\n{integrated_context}"
+                    if integrated_context else _chat_anonymization_rule
+                )
 
         session_date = (data.get('session_date') or '').strip() or now_brasilia_iso()[:10]
         current_user = (getattr(g, 'current_user', None) or {})
