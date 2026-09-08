@@ -223,6 +223,7 @@ from diary_storage import DiaryStorage
 from pdi_storage import PDIStorage
 from pdi_defaults import get_pdi_subject_ids_for_grade, normalize_trimesters
 from prompt_storage import PromptStorage
+from skills_storage import SkillsStorage
 from school_storage import SchoolStorage
 from municipality_storage import MunicipalityStorage
 from student_storage import StudentStorage
@@ -268,6 +269,7 @@ PEI_STORAGE_BUCKET = (os.getenv('SUPABASE_STORAGE_BUCKET_PEI', 'pei-documents') 
 DIARY_IMAGES_BUCKET = (os.getenv('SUPABASE_STORAGE_BUCKET_DIARY_IMAGES', 'diary-images') or 'diary-images').strip()
 
 _prompt_storage = PromptStorage(storage_dir=PROMPTS_FOLDER, database_url=DATABASE_URL)
+_skills_storage = SkillsStorage(storage_dir=PROMPTS_FOLDER, database_url=DATABASE_URL)
 # Lista canônica de anos/series esperada pelo sistema
 ALLOWED_GRADES = [
     '1° Ano do Infantil',
@@ -6947,6 +6949,78 @@ def activate_prompt(prompt_id):
         return jsonify(prompt)
     except ValueError as e:
         return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── Skills endpoints ────────────────────────────────────────────────────────
+
+@app.route('/api/skills', methods=['GET'])
+def list_skills():
+    """Lista todas as skills ativas. Disponível para todos os autenticados."""
+    try:
+        skills = _skills_storage.list_skills(include_inactive=False)
+        return jsonify(skills)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/skills', methods=['POST'])
+def create_skill():
+    """Cria uma nova skill. Somente admin."""
+    if _current_role() != 'admin':
+        return jsonify({"error": "Somente administradores podem criar skills"}), 403
+    data = request.json or {}
+    title = (data.get('title') or '').strip()
+    prompt = (data.get('prompt') or '').strip()
+    description = (data.get('description') or '').strip()
+    if not title:
+        return jsonify({"error": "Título é obrigatório"}), 400
+    if not prompt:
+        return jsonify({"error": "Prompt é obrigatório"}), 400
+    try:
+        skill = _skills_storage.create_skill(
+            title=title, prompt=prompt, description=description, created_by=_current_actor()
+        )
+        return jsonify(skill), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/skills/<skill_id>', methods=['PUT'])
+def update_skill(skill_id):
+    """Atualiza uma skill existente. Somente admin."""
+    if _current_role() != 'admin':
+        return jsonify({"error": "Somente administradores podem editar skills"}), 403
+    existing = _skills_storage.get_skill(skill_id)
+    if not existing:
+        return jsonify({"error": "Skill não encontrada"}), 404
+    data = request.json or {}
+    try:
+        skill = _skills_storage.update_skill(
+            skill_id,
+            title=data.get('title'),
+            prompt=data.get('prompt'),
+            description=data.get('description'),
+        )
+        return jsonify(skill)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/skills/<skill_id>', methods=['DELETE'])
+def delete_skill(skill_id):
+    """Desativa (soft delete) uma skill. Somente admin."""
+    if _current_role() != 'admin':
+        return jsonify({"error": "Somente administradores podem remover skills"}), 403
+    existing = _skills_storage.get_skill(skill_id)
+    if not existing:
+        return jsonify({"error": "Skill não encontrada"}), 404
+    try:
+        ok = _skills_storage.delete_skill(skill_id)
+        if ok:
+            return jsonify({"message": "Skill removida"})
+        return jsonify({"error": "Falha ao remover skill"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
