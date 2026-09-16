@@ -223,7 +223,7 @@ from diary_storage import DiaryStorage
 from pdi_storage import PDIStorage
 from pdi_defaults import get_pdi_subject_ids_for_grade, normalize_trimesters
 from prompt_storage import PromptStorage
-from skills_storage import SkillsStorage
+from skills_storage import SavedPeiStructuredStorage, SavedSkillsStorage, SkillsStorage
 from school_storage import SchoolStorage
 from municipality_storage import MunicipalityStorage
 from student_storage import StudentStorage
@@ -270,6 +270,8 @@ DIARY_IMAGES_BUCKET = (os.getenv('SUPABASE_STORAGE_BUCKET_DIARY_IMAGES', 'diary-
 
 _prompt_storage = PromptStorage(storage_dir=PROMPTS_FOLDER, database_url=DATABASE_URL)
 _skills_storage = SkillsStorage(storage_dir=PROMPTS_FOLDER, database_url=DATABASE_URL)
+_saved_skills_storage = SavedSkillsStorage(storage_dir=PROMPTS_FOLDER, database_url=DATABASE_URL)
+_saved_pei_structured_storage = SavedPeiStructuredStorage(storage_dir=PROMPTS_FOLDER, database_url=DATABASE_URL)
 # Lista canônica de anos/series esperada pelo sistema
 ALLOWED_GRADES = [
     '1° Ano do Infantil',
@@ -510,7 +512,9 @@ AVALIADOR_BLOCKED_PREFIXES = (
     '/api/rag/peis',
     '/api/rag/pei-sources-preview',
     '/api/rag/pei-prompt',
+    '/api/rag/pei-structured-prompt',
     '/api/rag/chat-prompt',
+    '/api/saved-peis-structured',
 )
 
 MUTATING_METHODS = {'POST', 'PUT', 'DELETE', 'PATCH'}
@@ -713,6 +717,8 @@ def _default_pei_source_selection() -> Dict[str, bool]:
         'teachers_pre_registration': True,
         'school_pre_registration': True,
         'linked_peis': True,
+        'saved_skill_results': False,
+        'saved_peis_structured': False,
     }
 
 
@@ -892,6 +898,29 @@ def _build_integrated_student_context(
     if evidence_block:
         sections.insert(0, evidence_block)
 
+    if source_selection.get('saved_peis_structured'):
+        _sid_list = [student_id] if student_id else None
+        _raw_peis_structured = _saved_pei_structured_storage.list_results(
+            student_ids=_sid_list,
+            start_date=saved_peis_structured_start_date,
+            end_date=saved_peis_structured_end_date,
+        )
+        if not student_id and student_name:
+            _raw_peis_structured = [r for r in _raw_peis_structured if r.get('student_name') == canonical_student_name]
+        if _raw_peis_structured:
+            redact_map = _collect_deanonymization_map(student_record, school_record, linked_teacher_records)
+            pei_struct_parts = []
+            for pei_item in _raw_peis_structured[:5]:
+                pei_date = (pei_item.get('created_at') or '')[:10]
+                pei_author = pei_item.get('saved_by_username') or ''
+                pei_text = _anonymize_known_names(pei_item.get('response', ''), redact_map)
+                header_line = f"[Data: {pei_date}" + (f", Salvo por: {pei_author}" if pei_author else "") + "]"
+                pei_struct_parts.append(f"{header_line}\n{pei_text}")
+            sections.append(
+                'PEIs Estruturados salvos para este aluno (Markdown com seções ## N.):\n\n'
+                + '\n\n---\n\n'.join(pei_struct_parts)
+            )
+
     source_status = (
         'Status oficial das fontes (use estas flags para responder perguntas de existência de dados):\n'
         f'- diario_entries_count: {diary_entries_count}\n'
@@ -1046,6 +1075,10 @@ def _build_anonymized_student_context(
     diary_summary_individual_end_date: str = '',
     diary_summary_family_start_date: str = '',
     diary_summary_family_end_date: str = '',
+    saved_skill_results_start_date: str = '',
+    saved_skill_results_end_date: str = '',
+    saved_peis_structured_start_date: str = '',
+    saved_peis_structured_end_date: str = '',
     selected_pei_ids: Optional[List[str]] = None,
 ) -> str:
     """Constrói contexto integrado usando apenas dados anonimizados (sem nomes reais) para envio à IA."""
@@ -1224,6 +1257,32 @@ def _build_anonymized_student_context(
             + json.dumps(pei_summaries, ensure_ascii=False, indent=2)
         )
 
+    saved_results_for_context: List[Dict] = []
+    if source_selection.get('saved_skill_results'):
+        _sid_list = [student_id] if student_id else None
+        _raw_saved = _saved_skills_storage.list_results(
+            student_ids=_sid_list,
+            start_date=saved_skill_results_start_date,
+            end_date=saved_skill_results_end_date,
+        )
+        # Se não filtrou por ID, filtra por nome como fallback
+        if not student_id and student_name:
+            _raw_saved = [r for r in _raw_saved if r.get('student_name') == canonical_student_name]
+        if _raw_saved:
+            redact_map = _collect_deanonymization_map(student_record, school_record, linked_teacher_records)
+            for result in _raw_saved:
+                anon_text = _anonymize_known_names(result.get('response', ''), redact_map)
+                saved_results_for_context.append({
+                    'skill_title': result.get('skill_title', ''),
+                    'created_at': (result.get('created_at') or '')[:10],
+                    'saved_by': result.get('saved_by_username', ''),
+                    'response': _truncate_excerpt(anon_text, max_length=1500),
+                })
+            sections.append(
+                'Respostas de Skills salvas para este aluno (anonimizadas, JSON):\n'
+                + json.dumps(saved_results_for_context, ensure_ascii=False, indent=2)
+            )
+
     source_status = (
         'Status oficial das fontes (use estas flags para responder perguntas de existência de dados):\n'
         f'- diario_entries_count: {diary_entries_count}\n'
@@ -1233,6 +1292,7 @@ def _build_anonymized_student_context(
         f'- teachers_pre_registration_included: {str(source_selection.get("teachers_pre_registration") and len(linked_teacher_records) > 0).lower()}\n'
         f'- school_pre_registration_included: {str(source_selection.get("school_pre_registration") and bool(school_record)).lower()}\n'
         f'- linked_peis_included: {str(source_selection.get("linked_peis") and len(linked_peis) > 0).lower()}\n'
+        f'- saved_skill_results_included: {str(bool(saved_results_for_context)).lower()}\n'
         'Regra: não classifique PDI como Diário. Se diario_entries_count = 0, responda que não há diário cadastrado.'
     )
     sections.insert(0, source_status)
@@ -1257,6 +1317,10 @@ def get_pei_sources_preview():
     diary_summary_individual_end_date = request.args.get('diary_summary_individual_end_date', '').strip()
     diary_summary_family_start_date = request.args.get('diary_summary_family_start_date', '').strip()
     diary_summary_family_end_date = request.args.get('diary_summary_family_end_date', '').strip()
+    saved_skill_results_start_date = request.args.get('saved_skill_results_start_date', '').strip()
+    saved_skill_results_end_date = request.args.get('saved_skill_results_end_date', '').strip()
+    saved_peis_structured_start_date = request.args.get('saved_peis_structured_start_date', '').strip()
+    saved_peis_structured_end_date = request.args.get('saved_peis_structured_end_date', '').strip()
 
     student = None
     if student_id:
@@ -1297,7 +1361,7 @@ def get_pei_sources_preview():
     # As buscas abaixo são independentes entre si (aluno/escola já resolvidos) —
     # rodar em paralelo evita que cada uma espere a anterior terminar, já que a
     # maior parte do tempo é rede/IO (Postgres, ChromaDB), não CPU.
-    with ThreadPoolExecutor(max_workers=7) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
         school_future = executor.submit(_get_school_record, school_id) if school_id else None
         teacher_futures = [executor.submit(_get_teacher_record, tid) for tid in teacher_ids]
         diary_future = executor.submit(_get_diary_entries_for_student, student_name, student_id=student_id)
@@ -1306,6 +1370,18 @@ def get_pei_sources_preview():
         pdi_future = executor.submit(_get_pdi_for_student, student_name, student_id=student_id)
         peis_future = executor.submit(_list_linked_peis, student_name, student_id=student_id, school=school)
         docs_future = executor.submit(_summarize_vector_documents_for_student, engine, student_name, school)
+        saved_skills_future = executor.submit(
+            _saved_skills_storage.list_results,
+            student_ids=[student_id] if student_id else None,
+            start_date=saved_skill_results_start_date,
+            end_date=saved_skill_results_end_date,
+        )
+        saved_peis_structured_future = executor.submit(
+            _saved_pei_structured_storage.list_results,
+            student_ids=[student_id] if student_id else None,
+            start_date=saved_peis_structured_start_date,
+            end_date=saved_peis_structured_end_date,
+        )
 
         school_record = school_future.result() if school_future else None
         teacher_records = [f.result() for f in teacher_futures if f.result()]
@@ -1315,6 +1391,8 @@ def get_pei_sources_preview():
         pdi = pdi_future.result()
         linked_peis = peis_future.result()
         docs_summary = docs_future.result()
+        saved_skill_results_all = saved_skills_future.result()
+        saved_peis_structured_all = saved_peis_structured_future.result()
 
     diary_entries = _filter_diary_entries_by_date(diary_entries_all, diary_start_date, diary_end_date)
     family_diary_entries = _filter_diary_entries_by_date(
@@ -1432,6 +1510,33 @@ def get_pei_sources_preview():
                     for item in family_summaries
                 ],
                 "excerpt": _truncate_excerpt(family_summaries[0].get('summary_text') or '', max_length=400) if family_summaries else '',
+            },
+            "saved_skill_results": {
+                "included": len(saved_skill_results_all) > 0,
+                "count": len(saved_skill_results_all),
+                "results": [
+                    {
+                        "id": item.get('id'),
+                        "skill_title": item.get('skill_title'),
+                        "saved_by_username": item.get('saved_by_username'),
+                        "created_at": item.get('created_at'),
+                        "excerpt": _truncate_excerpt(item.get('response') or '', max_length=200),
+                    }
+                    for item in saved_skill_results_all[:5]
+                ],
+            },
+            "saved_peis_structured": {
+                "included": len(saved_peis_structured_all) > 0,
+                "count": len(saved_peis_structured_all),
+                "results": [
+                    {
+                        "id": item.get('id'),
+                        "saved_by_username": item.get('saved_by_username'),
+                        "created_at": item.get('created_at'),
+                        "excerpt": _truncate_excerpt(item.get('response') or '', max_length=200),
+                    }
+                    for item in saved_peis_structured_all[:5]
+                ],
             },
         },
     })
@@ -6122,7 +6227,11 @@ def rag_chat():
 
         selected_sources = _parse_selected_sources(data.get('selected_sources'))
         include_vector_documents = bool(selected_sources.get('vector_documents'))
-        chat_prompt_data = _prompt_storage.get_chat_prompt()
+        system_prompt_scope = (data.get('system_prompt_scope') or 'chat').strip()
+        if system_prompt_scope == 'pei_structured':
+            chat_prompt_data = _prompt_storage.get_pei_structured_prompt()
+        else:
+            chat_prompt_data = _prompt_storage.get_chat_prompt()
         context_filter = None
         if include_vector_documents and student_name and school:
             context_filter = {"$and": [{"student_name": {"$eq": student_name}}, {"school": {"$eq": school}}]}
@@ -6155,6 +6264,10 @@ def rag_chat():
                 diary_summary_individual_end_date=(data.get('diary_summary_individual_end_date') or '').strip(),
                 diary_summary_family_start_date=(data.get('diary_summary_family_start_date') or '').strip(),
                 diary_summary_family_end_date=(data.get('diary_summary_family_end_date') or '').strip(),
+                saved_skill_results_start_date=(data.get('saved_skill_results_start_date') or '').strip(),
+                saved_skill_results_end_date=(data.get('saved_skill_results_end_date') or '').strip(),
+                saved_peis_structured_start_date=(data.get('saved_peis_structured_start_date') or '').strip(),
+                saved_peis_structured_end_date=(data.get('saved_peis_structured_end_date') or '').strip(),
                 selected_pei_ids=data.get('selected_pei_ids'),
             )
             _chat_student = _get_student_record(student_id) if student_id else None
@@ -6568,6 +6681,8 @@ def generate_pei():
             diary_summary_individual_end_date=(data.get('diary_summary_individual_end_date') or '').strip(),
             diary_summary_family_start_date=(data.get('diary_summary_family_start_date') or '').strip(),
             diary_summary_family_end_date=(data.get('diary_summary_family_end_date') or '').strip(),
+            saved_skill_results_start_date=(data.get('saved_skill_results_start_date') or '').strip(),
+            saved_skill_results_end_date=(data.get('saved_skill_results_end_date') or '').strip(),
             selected_pei_ids=data.get('selected_pei_ids'),
         )
 
@@ -6783,6 +6898,187 @@ def reset_pei_prompt():
         return jsonify(restored)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/pei-structured-prompt', methods=['GET'])
+def get_pei_structured_prompt():
+    """Retorna o prompt atual usado na página PEI Estruturado."""
+    try:
+        return jsonify(_prompt_storage.get_pei_structured_prompt())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/pei-structured-prompt', methods=['PUT'])
+def update_pei_structured_prompt():
+    """Atualiza o prompt da página PEI Estruturado."""
+    data = request.json or {}
+    prompt = (data.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({"error": "Prompt é obrigatório"}), 400
+    try:
+        saved = _prompt_storage.save_pei_structured_prompt(prompt)
+        return jsonify(saved)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rag/pei-structured-prompt/reset', methods=['POST'])
+def reset_pei_structured_prompt():
+    """Restaura o prompt da página PEI Estruturado para o base."""
+    try:
+        restored = _prompt_storage.reset_pei_structured_prompt_to_base()
+        return jsonify(restored)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── PEIs Salvos (página PEI Estruturado) ─────────────────────────────────────
+
+@app.route('/api/saved-peis-structured', methods=['GET'])
+def list_saved_peis_structured():
+    student_id = request.args.get('student_id', '').strip()
+    start_date = request.args.get('start_date', '').strip()
+    end_date = request.args.get('end_date', '').strip()
+    student_ids = [student_id] if student_id else None
+    results = _saved_pei_structured_storage.list_results(
+        student_ids=student_ids,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return jsonify(results)
+
+
+@app.route('/api/saved-peis-structured', methods=['POST'])
+def save_pei_structured():
+    data = request.get_json() or {}
+    student_id = (data.get('student_id') or '').strip()
+    student_name = (data.get('student_name') or '').strip()
+    response_text = (data.get('response') or '').strip()
+    session_id = (data.get('session_id') or '').strip()
+    if not student_id or not student_name or not response_text:
+        return jsonify({"error": "student_id, student_name e response são obrigatórios"}), 400
+    user = _current_user() or {}
+    result = _saved_pei_structured_storage.save_result(
+        student_id=student_id,
+        student_name=student_name,
+        response=response_text,
+        saved_by_user_id=user.get('id', ''),
+        saved_by_username=user.get('username') or user.get('email') or '',
+        session_id=session_id,
+    )
+    return jsonify(result), 201
+
+
+@app.route('/api/saved-peis-structured/<result_id>', methods=['PUT'])
+def update_saved_pei_structured(result_id):
+    """Atualiza o conteúdo (response) de um PEI salvo."""
+    data = request.get_json() or {}
+    response = (data.get('response') or '').strip()
+    if not response:
+        return jsonify({"error": "response é obrigatório"}), 400
+    updated = _saved_pei_structured_storage.update_result(result_id, response=response)
+    if not updated:
+        return jsonify({"error": "Não encontrado"}), 404
+    return jsonify(updated)
+
+
+@app.route('/api/saved-peis-structured/<result_id>', methods=['DELETE'])
+def delete_saved_pei_structured(result_id):
+    deleted = _saved_pei_structured_storage.delete_result(result_id)
+    if not deleted:
+        return jsonify({"error": "Não encontrado"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route('/api/saved-peis-structured/render-pdf', methods=['POST'])
+def render_pei_structured_pdf():
+    """Gera PDF em memória a partir de um PEI (Markdown com ## N. seções).
+    Mantém compatibilidade com PEIs salvos no formato JSON antigo."""
+    import re as _re
+    import json as _json
+    from pdf_generator import PEI_PDF
+    from time_utils import now_brasilia
+
+    data = request.get_json() or {}
+    response_text = (data.get('response') or '').strip()
+    student_name = (data.get('student_name') or 'Estudante').strip()
+    school = (data.get('school') or '').strip()
+
+    if not response_text:
+        return jsonify({"error": "response é obrigatório"}), 400
+
+    # Remove fences de código se houver (```json, ```markdown, ```)
+    clean = _re.sub(r'^```[^\n]*\n?', '', response_text, flags=_re.IGNORECASE).strip()
+    clean = _re.sub(r'\n?```\s*$', '', clean).strip()
+
+    # Compatibilidade: se parece JSON (PEIs salvos no formato antigo), converte para Markdown
+    if clean.lstrip().startswith('{'):
+        SECTION_TITLES = [
+            ('identificacao_estudante',                           '1. Identificação do Estudante'),
+            ('perfil_funcional',                                  '2. Perfil Funcional'),
+            ('objetivos_educacionais_individualizados',           '3. Objetivos Educacionais Individualizados'),
+            ('estrategias_pedagogicas',                           '4. Estratégias Pedagógicas'),
+            ('apoios_e_recursos',                                 '5. Apoios e Recursos'),
+            ('adaptacoes_curriculares_por_componente_curricular', '6. Adaptações Curriculares por Componente Curricular'),
+            ('participacao_familia_equipe_escolar',               '7. Participação da Família e Equipe Escolar'),
+            ('avaliacao_e_monitoramento',                         '8. Avaliação e Monitoramento'),
+            ('cultura_escolar_e_inclusao',                       '9. Cultura Escolar e Inclusão'),
+            ('fundamentacao_legal',                               '10. Fundamentação Legal'),
+        ]
+        try:
+            # Parser robusto: escapa quebras de linha reais dentro de strings JSON
+            def _parse_json_robust(text):
+                try:
+                    return _json.loads(text)
+                except Exception:
+                    pass
+                in_str = False; esc = False; buf = []
+                for ch in text:
+                    if esc: buf.append(ch); esc = False; continue
+                    if ch == '\\' and in_str: esc = True; buf.append(ch); continue
+                    if ch == '"': in_str = not in_str; buf.append(ch); continue
+                    if in_str and ch == '\n': buf.append('\\n'); continue
+                    if in_str and ch == '\r': buf.append('\\r'); continue
+                    buf.append(ch)
+                return _json.loads(''.join(buf))
+
+            sections = _parse_json_robust(clean)
+            if isinstance(sections, dict):
+                parts = []
+                for key, title in SECTION_TITLES:
+                    content = (sections.get(key) or '').strip()
+                    if content:
+                        # Remove linha de título redundante que a IA costumava incluir
+                        content = _re.sub(r'^#{0,3}\s*\d+\.\s+[^\n]+\n+', '', content).strip()
+                        parts.append(f"## {title}\n\n{content}")
+                clean = '\n\n'.join(parts)
+        except Exception:
+            pass  # Usa o texto como-está
+
+    try:
+        header = f"Gerado em: {now_brasilia().strftime('%d/%m/%Y às %H:%M')}\n\n---\n\n"
+        pdf = PEI_PDF(
+            student_name=student_name,
+            school=school,
+            doc_title="Plano Educacional Individualizado",
+            doc_subtitle="PEI Estruturado — Autism.IA",
+            doc_label="PEI",
+        )
+        pdf.render_markdown(header + clean)
+        pdf_bytes = bytes(pdf.output())
+    except Exception as e:
+        return jsonify({"error": f"Erro ao gerar PDF: {e}"}), 500
+
+    safe_name = ''.join(c if c.isalnum() or c in '-_' else '_' for c in student_name)
+    filename = f"PEI_{safe_name}.pdf"
+
+    return send_file(
+        BytesIO(pdf_bytes),
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name=filename,
+    )
 
 
 @app.route('/api/rag/chat-prompt', methods=['GET'])
@@ -7021,6 +7317,85 @@ def delete_skill(skill_id):
         if ok:
             return jsonify({"message": "Skill removida"})
         return jsonify({"error": "Falha ao remover skill"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── Saved Skill Results endpoints ───────────────────────────────────────────
+
+@app.route('/api/saved-skills', methods=['GET'])
+def list_saved_skills():
+    """Lista resultados salvos de skills, filtrados pelo escopo do usuário."""
+    try:
+        role = _current_role()
+        if role == 'admin':
+            # Admin vê tudo
+            results = _saved_skills_storage.list_results()
+        else:
+            # Demais perfis veem apenas alunos visíveis a eles
+            all_students = _read_with_optional_fallback('student', _student_storage, 'list_all_students')
+            visible_ids = [
+                str(s.get('id') or s.get('student_id') or '')
+                for s in all_students
+                if _student_visible_to_user(s)
+            ]
+            results = _saved_skills_storage.list_results(student_ids=visible_ids)
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/saved-skills', methods=['POST'])
+def save_skill_result():
+    """Salva um resultado de skill. Disponível para todos os autenticados."""
+    data = request.json or {}
+    required = ['skill_title', 'student_id', 'student_name', 'response']
+    for field in required:
+        if not data.get(field):
+            return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
+
+    # Verifica se o usuário pode ver esse aluno
+    student_id = str(data['student_id']).strip()
+    all_students = _read_with_optional_fallback('student', _student_storage, 'list_all_students')
+    student_record = next(
+        (s for s in all_students if str(s.get('id') or s.get('student_id') or '') == student_id),
+        None
+    )
+    if student_record and not _student_visible_to_user(student_record):
+        return _scope_forbidden('Você não pode salvar resultados para este aluno')
+
+    caller = _current_user() or {}
+    try:
+        result = _saved_skills_storage.save_result(
+            skill_id=str(data.get('skill_id') or ''),
+            skill_title=str(data['skill_title']).strip(),
+            student_id=student_id,
+            student_name=str(data['student_name']).strip(),
+            response=str(data['response']).strip(),
+            session_id=str(data.get('session_id') or ''),
+            saved_by_user_id=str(caller.get('id') or ''),
+            saved_by_username=_current_actor(),
+        )
+        return jsonify(result), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/saved-skills/<result_id>', methods=['DELETE'])
+def delete_saved_skill_result(result_id):
+    """Remove um resultado salvo. Admin pode deletar qualquer um; outros só o próprio."""
+    try:
+        existing = _saved_skills_storage.get_result(result_id)
+        if not existing:
+            return jsonify({"error": "Resultado não encontrado"}), 404
+        role = _current_role()
+        caller_id = str((_current_user() or {}).get('id') or '')
+        if role != 'admin' and existing.get('saved_by_user_id') != caller_id:
+            return jsonify({"error": "Sem permissão para remover este resultado"}), 403
+        ok = _saved_skills_storage.delete_result(result_id)
+        if ok:
+            return jsonify({"message": "Resultado removido"})
+        return jsonify({"error": "Falha ao remover resultado"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

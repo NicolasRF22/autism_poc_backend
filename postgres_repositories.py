@@ -8,6 +8,7 @@ from sqlalchemy import (
     UniqueConstraint, create_engine, delete, func, select, text, update,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from pdi_defaults import get_pdi_subject_ids_for_grade, normalize_trimesters
 from time_utils import now_brasilia_iso
@@ -3902,7 +3903,7 @@ class AIUsageRepository(_BaseRepository):
 
 
 def create_postgres_repositories(database_url: str):
-    engine = create_engine(database_url, future=True)
+    engine = create_engine(database_url, future=True, poolclass=NullPool)
     # Cria tabelas que ainda não existem (idempotente)
     Base.metadata.create_all(engine)
     # Migração: colunas FK, backfill, limpeza de JSON, constraints

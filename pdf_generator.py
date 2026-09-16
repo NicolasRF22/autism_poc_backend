@@ -355,6 +355,54 @@ def markdown_to_pdf(markdown_text: str, student_name: str, school: str,
     pdf.output(output_path)
 
 
+def pei_structured_to_pdf_bytes(sections: dict, student_name: str, school: str) -> bytes:
+    """Gera PDF (em memória) a partir de um PEI estruturado (dict com 10 seções em markdown)."""
+    from time_utils import now_brasilia
+
+    SECTION_TITLES = [
+        ('identificacao_estudante',                        '1. Identificação do Estudante'),
+        ('perfil_funcional',                               '2. Perfil Funcional'),
+        ('objetivos_educacionais_individualizados',        '3. Objetivos Educacionais Individualizados'),
+        ('estrategias_pedagogicas',                        '4. Estratégias Pedagógicas'),
+        ('apoios_e_recursos',                              '5. Apoios e Recursos'),
+        ('adaptacoes_curriculares_por_componente_curricular', '6. Adaptações Curriculares por Componente Curricular'),
+        ('participacao_familia_equipe_escolar',            '7. Participação da Família e Equipe Escolar'),
+        ('avaliacao_e_monitoramento',                      '8. Avaliação e Monitoramento'),
+        ('cultura_escolar_e_inclusao',                     '9. Cultura Escolar e Inclusão'),
+        ('fundamentacao_legal',                            '10. Fundamentação Legal'),
+    ]
+
+    import re as _re
+
+    lines = [
+        f"Gerado em: {now_brasilia().strftime('%d/%m/%Y às %H:%M')}",
+        "---",
+        "",
+    ]
+    for key, title in SECTION_TITLES:
+        content = (sections.get(key) or '').strip()
+        if content:
+            # A IA inclui o título da seção como primeira linha do conteúdo
+            # (ex: "1. Identificação do Estudante\n\n* Nome:..." ou
+            #      "## 1. Identificação do Estudante\n\n* Nome:...").
+            # Removemos essa linha redundante para não duplicar o cabeçalho.
+            content = _re.sub(r'^#{0,3}\s*\d+\.\s+[^\n]+\n+', '', content).strip()
+            lines.append(f"## {title}")
+            lines.append("")
+            lines.append(content)
+            lines.append("")
+
+    pdf = PEI_PDF(
+        student_name=student_name,
+        school=school,
+        doc_title="Plano Educacional Individualizado",
+        doc_subtitle="PEI Estruturado — Autism.IA",
+        doc_label="PEI",
+    )
+    pdf.render_markdown("\n".join(lines))
+    return bytes(pdf.output())
+
+
 def chat_transcript_to_pdf_bytes(messages: list, student_name: str, school: str) -> bytes:
     """Gera PDF (em memória) com o histórico de um chat, no mesmo estilo visual do PEI."""
     from time_utils import now_brasilia

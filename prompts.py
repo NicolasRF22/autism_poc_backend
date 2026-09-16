@@ -177,6 +177,27 @@ Inclua uma seção com esse dizer:
 "Este Plano Educacional Individualizado PEI está em conformidade com a Lei Brasileira de Inclusão da Pessoa com Deficiência Lei número 13.146 de 2015, com a Política Nacional de Educação Especial na Perspectiva da Educação Inclusiva e com a Base Nacional Comum Curricular BNCC, garantindo o direito à educação com equidade, respeito às diferenças e apoio às necessidades educacionais específicas."
 """
 
+SYSTEM_PROMPT_PEI_STRUCTURED = SYSTEM_PROMPT_PEI.rstrip() + """
+
+---
+
+FORMATO OBRIGATÓRIO DE SAÍDA:
+Gere sua resposta em Markdown formatado. Inicie cada seção com exatamente os cabeçalhos abaixo, nesta ordem:
+
+## 1. Identificação do Estudante
+## 2. Perfil Funcional
+## 3. Objetivos Educacionais Individualizados
+## 4. Estratégias Pedagógicas
+## 5. Apoios e Recursos
+## 6. Adaptações Curriculares por Componente Curricular
+## 7. Participação da Família e Equipe Escolar
+## 8. Avaliação e Monitoramento
+## 9. Cultura Escolar e Inclusão
+## 10. Fundamentação Legal
+
+Não inclua blocos de código, fences (como ```json ou ```) ou qualquer estrutura JSON. Use markdown puro: listas com *, negrito com **, tabelas com |. Mantenha todo o conteúdo e detalhamento exigidos pela estrutura do PEI. Não omita nenhuma seção.
+"""
+
 SYSTEM_PROMPT_DIARY_SUMMARY = """Você é um assistente pedagógico que ajuda a resumir o acompanhamento diário de um aluno com Transtorno do Espectro Autista (TEA), com base nas entradas de diário escolar e/ou familiar fornecidas abaixo.
 
 Ao gerar um resumo:
